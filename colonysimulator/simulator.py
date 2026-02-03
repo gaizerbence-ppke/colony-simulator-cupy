@@ -1,6 +1,21 @@
-import cupy as cp
 import numpy as np
-import cupyx.scipy.fft as cufft
+import scipy.fft
+try:
+    import cupy as cp
+    import cupyx.scipy.fft as cufft
+    if cp.is_available():
+        print("Cuda available")
+        xp = cp
+        xfft = cufft
+    else:
+        xp = np
+        xfft = scipy.fft
+        print("Cuda NOT available, fallback to CPU")
+except (ImportError, Exception):
+    xp = np
+    cp = None
+    fft = scipy.fft
+    print("Cuda NOT available, fallback to CPU")
 
 class CellSimulationModel:
     def __init__():
@@ -18,4 +33,7 @@ class AgarModel:
         self.width = int(mmWidth // spatialResolution)
         self.depth = int(mmDepth // spatialResolution)
 
-        self._concentrationMap = np.zeros((self.length, self.width, self.depth), dtype=np.float32)
+        self._concentrationMap = xp.zeros((self.length, self.width, self.depth), dtype=np.float32)
+
+    def setConcentration(self, concentration):
+        self._concentrationMap[:, :, :] = concentration
