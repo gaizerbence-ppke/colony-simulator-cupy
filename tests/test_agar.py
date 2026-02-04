@@ -13,5 +13,7 @@ def test_agarModel():
     nutrientUptake = agarModel.nutrientUptakeStep(nutrientRequired)
 
     agarModel.diffusionStep()
+    agarModel.refreshConcentrationMap()
+    slice = agarModel.getConcentrationMapSlice(1, 20)
 
     assert True

@@ -78,6 +78,24 @@ class AgarModel:
     def nutrientUptakeStep(self, nutrientRequired):
         top_layer = self._topLayerInverseTransform()
         nutrientTakenMap = xp.min(xp.stack((top_layer, nutrientRequired), axis=2), axis=2)
+        nutrientTakenMap = xp.max(xp.stack((nutrientTakenMap, nutrientTakenMap * 0), axis=2), axis=2)
         nutrientTakenSpectrum = self._topLayerSparseTransform(nutrientTakenMap)
         self._spectralMap -= nutrientTakenSpectrum
         return nutrientTakenSpectrum
+    
+    def refreshConcentrationMap(self):
+        self._concentrationMap = xfft.idctn(self._spectralMap)
+
+    def getConcentrationMapSlice(self, axis, index):
+        axisInt = int(axis)
+        if axisInt < 0 or axisInt > 2:
+            raise Exception("Axis must be 0, 1 or 2")
+        indexInt = int(index)
+        if indexInt < 0 or indexInt > self._concentrationMap.shape[axis]:
+            raise Exception(f"index on axis {axisInt} must be between 0 and {self._concentrationMap.shape[axis]}")
+        if axisInt == 0:
+            return self._concentrationMap[index, :, :]
+        if axisInt == 1:
+            return self._concentrationMap[:, index, :]
+        if axisInt == 2:
+            return self._concentrationMap[:, :, index]
