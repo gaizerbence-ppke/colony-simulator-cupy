@@ -14,7 +14,7 @@ try:
 except (ImportError, Exception):
     xp = np
     cp = None
-    fft = scipy.fft
+    xfft = scipy.fft
     print("Cuda NOT available, fallback to CPU")
 
 class CellSimulationModel:
@@ -34,6 +34,50 @@ class AgarModel:
         self.depth = int(mmDepth // spatialResolution)
 
         self._concentrationMap = xp.zeros((self.length, self.width, self.depth), dtype=np.float32)
+        
+        self._spectralMap = None
+        self.timeResolution = 0
+        self._diffusionKernel = None
 
     def setConcentration(self, concentration):
         self._concentrationMap[:, :, :] = concentration
+
+    def initiateModel(self, timeResolution):
+        self._spectralMap = xfft.dctn(self._concentrationMap, norm="ortho")
+        self.timeResolution = timeResolution
+
+        x = xp.linspace(0, self.length - 1, self.length) / self.length
+        y = xp.linspace(0, self.width - 1, self.width) / self.width
+        z = xp.linspace(0, self.depth - 1, self.depth) / self.depth
+        xx, yy, zz = xp.meshgrid(x, y, z, indexing='ij')
+        
+        self._diffusionKernel = xp.exp(-(xx**2 + yy**2 + zz**2) 
+                                      * (self.diffusionCoefficient * self.timeResolution * xp.pi**2) 
+                                      / (self.spatialResolution**2))
+
+    def diffusionStep(self):
+        self._spectralMap *= self._diffusionKernel
+
+
+    def _topLayerInverseTransform(self):
+        n = xp.arange(self.depth)
+        basisVector = xp.cos(xp.pi * n / 2 / self.depth)
+        basisVector[0] = 1 / xp.sqrt(2)
+        reduced_2d = xp.tensordot(self._spectralMap, basisVector, axes=([2], [0]))
+        return xfft.idctn(reduced_2d, norm="ortho") / xp.sqrt(5)
+
+    def _topLayerSparseTransform(self, layer):
+        transformedLayer = xfft.dctn(layer, norm="ortho")
+        freqIndices = xp.arange(self.depth)
+        basisVector = xp.cos(xp.pi * freqIndices / 2 / self.depth)
+        scaling = xp.full(self.depth, xp.sqrt(2.0 / self.depth))
+        scaling[0] = xp.sqrt(1.0 / self.depth)
+        basisVector *= scaling
+        return transformedLayer[:, :, xp.newaxis] * basisVector[xp.newaxis, xp.newaxis, :]
+
+    def nutrientUptakeStep(self, nutrientRequired):
+        top_layer = self._topLayerInverseTransform()
+        nutrientTakenMap = xp.min(xp.stack((top_layer, nutrientRequired), axis=2), axis=2)
+        nutrientTakenSpectrum = self._topLayerSparseTransform(nutrientTakenMap)
+        self._spectralMap -= nutrientTakenSpectrum
+        return nutrientTakenSpectrum
