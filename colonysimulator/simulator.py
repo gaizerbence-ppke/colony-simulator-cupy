@@ -1,24 +1,9 @@
-import numpy as np
-import scipy.fft
-try:
-    import cupy as cp
-    import cupyx.scipy.fft as cufft
-    if cp.is_available():
-        print("Cuda available")
-        xp = cp
-        xfft = cufft
-    else:
-        xp = np
-        xfft = scipy.fft
-        print("Cuda NOT available, fallback to CPU")
-except (ImportError, Exception):
-    xp = np
-    cp = None
-    xfft = scipy.fft
-    print("Cuda NOT available, fallback to CPU")
+from colonysimulator.utility import setup_array_backend
+
+xp, xfft = setup_array_backend()
 
 class CellSimulationModel:
-    def __init__():
+    def __init__(self):
         pass
 
 class AgarModel:
@@ -33,7 +18,7 @@ class AgarModel:
         self.width = int(mmWidth // spatialResolution)
         self.depth = int(mmDepth // spatialResolution)
 
-        self._concentrationMap = xp.zeros((self.length, self.width, self.depth), dtype=np.float32)
+        self._concentrationMap = xp.zeros((self.length, self.width, self.depth), dtype=xp.float32)
         
         self._spectralMap = None
         self.timeResolution = 0
@@ -81,7 +66,7 @@ class AgarModel:
         nutrientTakenMap = xp.max(xp.stack((nutrientTakenMap, nutrientTakenMap * 0), axis=2), axis=2)
         nutrientTakenSpectrum = self._topLayerSparseTransform(nutrientTakenMap)
         self._spectralMap -= nutrientTakenSpectrum
-        return nutrientTakenSpectrum
+        return nutrientTakenMap
     
     def refreshConcentrationMap(self):
         self._concentrationMap = xfft.idctn(self._spectralMap)
