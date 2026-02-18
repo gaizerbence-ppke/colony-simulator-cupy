@@ -1,4 +1,4 @@
-from colonysimulator.utility import setup_array_backend
+from colonysimulator.utility import initialize_binomial_distribution_matrix, setup_array_backend
 
 xp, xfft = setup_array_backend()
 
@@ -7,11 +7,12 @@ class CellSimulationModel:
         pass
 
 class AgarModel:
-    def __init__(self, mmLength, mmWidth, mmDepth, spatialResolution, diffusionCoefficient):
+    def __init__(self, mmLength, mmWidth, mmDepth, spatialResolution, timeResolution, diffusionCoefficient):
         self.mmLength = mmLength
         self.mmWidth = mmWidth
         self.mmDepth = mmDepth
         self.spatialResolution = spatialResolution
+        self.timeResolution = timeResolution
         self.diffusionCoefficient = diffusionCoefficient
 
         self.length = int(mmLength // spatialResolution)
@@ -21,15 +22,13 @@ class AgarModel:
         self._concentrationMap = xp.zeros((self.length, self.width, self.depth), dtype=xp.float32)
         
         self._spectralMap = None
-        self.timeResolution = 0
         self._diffusionKernel = None
 
     def setConcentration(self, concentration):
         self._concentrationMap[:, :, :] = concentration
 
-    def initiateModel(self, timeResolution):
+    def initiateModel(self):
         self._spectralMap = xfft.dctn(self._concentrationMap, norm="ortho")
-        self.timeResolution = timeResolution
 
         x = xp.linspace(0, self.length - 1, self.length) / self.length
         y = xp.linspace(0, self.width - 1, self.width) / self.width
@@ -84,3 +83,43 @@ class AgarModel:
             return self._concentrationMap[:, index, :]
         if axisInt == 2:
             return self._concentrationMap[:, :, index]
+class CellStrain:
+    def __init__(self, name, divisionTime, nutrientUptake, nutrientConsumption):
+        self.name = name
+        self.divisionTime = divisionTime
+        self.nutrientUptake = nutrientUptake
+        self.nutrientConsumption = nutrientConsumption
+class ColonyModel:
+    def __init__(self, agarModel, bracketCount, cellStrain):
+        self.agarModel = agarModel
+        self.bracketCount = bracketCount
+        self.divisionTime = cellStrain.divisionTime
+        self.nutrientUptake = cellStrain.nutrientUptake
+        self.nutrientConsumption = cellStrain.nutrientConsumption
+
+        idealMaxGrowth = bracketCount * self.divisionTime / agarModel.timeResolution
+        idealMaxPerish = idealMaxGrowth * (self.nutrientUptake / self.nutrientConsumption - 1)
+
+        self.maxGrowth = round(idealMaxGrowth)
+        self.maxPerish = round(idealMaxPerish)
+
+        print(f"Model for {cellStrain.name} initialized with max growth {self.maxGrowth} and max perish {self.maxPerish}")
+        print(f"Deviation from ideal growth: {(self.maxGrowth - idealMaxGrowth) / idealMaxGrowth}, Deviation from ideal perish: {(self.maxPerish - idealMaxPerish) / idealMaxPerish}")
+
+        self.deadMatrix = xp.zeros((agarModel.length, agarModel.width), dtype=xp.int32)
+        self.growingMatrix = xp.zeros((agarModel.length, agarModel.width, self.bracketCount), dtype=xp.int32)
+
+        growthWidth = self.maxGrowth + self.maxPerish + 1
+
+        self.binomialDistributionMatrix = initialize_binomial_distribution_matrix(growthWidth)
+        print(self.binomialDistributionMatrix)
+    def initiateSingleCellAtCenter(self):
+        centerX = self.agarModel.length // 2
+        centerY = self.agarModel.width // 2
+        self.growingMatrix[centerX, centerY, 0] = 1
+
+    def step(self):
+        foodRequired = self.growingMatrix.sum(axis=2) * self.nutrientConsumption * self.agarModel.timeResolution
+        foodAvailable = self.agarModel.nutrientUptakeStep(foodRequired)
+        foodRatio = foodAvailable / foodRequired
+        foodRatio = xp.nan_to_num(foodRatio, nan=0.0, posinf=0.0, neginf=0.0)

@@ -5,9 +5,9 @@ xp, xfft = setup_array_backend()
 
 
 def test_agarModel():
-    agarModel = cosim.AgarModel(20, 20, 20, 0.1, 6e-4)
+    agarModel = cosim.AgarModel(20, 20, 20, 0.1, 500, 6e-4)
     agarModel.setConcentration(1.0)
-    agarModel.initiateModel(500)
+    agarModel.initiateModel()
     
     nutrientRequired = xp.zeros((agarModel.length, agarModel.width))
     nutrientRequired[int(xp.round(agarModel.length / 2)), :] = 1
