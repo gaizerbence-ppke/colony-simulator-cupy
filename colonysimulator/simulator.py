@@ -1,4 +1,5 @@
 from colonysimulator.utility import initialize_binomial_distribution_matrix, setup_array_backend
+import os
 
 xp, xfft = setup_array_backend()
 
@@ -107,19 +108,39 @@ class ColonyModel:
         print(f"Deviation from ideal growth: {(self.maxGrowth - idealMaxGrowth) / idealMaxGrowth}, Deviation from ideal perish: {(self.maxPerish - idealMaxPerish) / idealMaxPerish}")
 
         self.deadMatrix = xp.zeros((agarModel.length, agarModel.width), dtype=xp.int32)
-        self.growingMatrix = xp.zeros((agarModel.length, agarModel.width, self.bracketCount), dtype=xp.int32)
+        self.growingMatrix = xp.zeros((self.bracketCount, agarModel.length, agarModel.width), dtype=xp.float32)
 
         growthWidth = self.maxGrowth + self.maxPerish + 1
 
         self.binomialDistributionMatrix = initialize_binomial_distribution_matrix(growthWidth)
-        print(self.binomialDistributionMatrix)
+        self.postGrowthTemporal = xp.zeros((self.bracketCount + self.maxGrowth + self.maxPerish, agarModel.length, agarModel.width), dtype=xp.float32)
+
+        if xp.__name__ == 'cupy':
+            kernel_code = open(os.path.join(os.path.dirname(__file__), "growthKernel.cu"), "r").read()
+            self.growthKernel = xp.RawKernel(kernel_code, "growthKernel")
+        else:
+            self.growthKernel = None
+            # TODO: Implement CPU mock
+
     def initiateSingleCellAtCenter(self):
         centerX = self.agarModel.length // 2
         centerY = self.agarModel.width // 2
-        self.growingMatrix[centerX, centerY, 0] = 1
+        self.growingMatrix[0, centerX, centerY] = 1
 
     def step(self):
-        foodRequired = self.growingMatrix.sum(axis=2) * self.nutrientConsumption * self.agarModel.timeResolution
+        foodRequired = self.growingMatrix.sum(axis=0) * self.nutrientConsumption * self.agarModel.timeResolution
         foodAvailable = self.agarModel.nutrientUptakeStep(foodRequired)
         foodRatio = foodAvailable / foodRequired
         foodRatio = xp.nan_to_num(foodRatio, nan=0.0, posinf=0.0, neginf=0.0)
+
+        if self.growthKernel is not None:
+            blockSize = (16, 16)
+            gridSize = ((self.agarModel.length + blockSize[0] - 1) // blockSize[0], (self.agarModel.width + blockSize[1] - 1) // blockSize[1])
+            self.growthKernel(gridSize, blockSize,
+                              (self.growingMatrix, self.postGrowthTemporal, foodRatio, self.binomialDistributionMatrix, self.maxGrowth, self.maxPerish, self.bracketCount, self.agarModel.length, self.agarModel.width))
+            print(foodRatio[self.agarModel.length // 2, self.agarModel.width // 2])
+            print(self.postGrowthTemporal[:, self.agarModel.length // 2, self.agarModel.width // 2].squeeze())
+            print(self.growingMatrix[:, self.agarModel.length // 2, self.agarModel.width // 2].squeeze())
+            print(xp.sum(self.postGrowthTemporal, axis=0))
+        else:
+            print("CPU growth step not implemented yet")
