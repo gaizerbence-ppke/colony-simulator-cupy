@@ -4,7 +4,7 @@ from colonysimulator.utility import setup_array_backend
 xp, xfft = setup_array_backend()
 
 def test_colonyModel():
-    agarModel = cosim.AgarModel(1, 1, .3, 0.1, 500, 6e-4)
+    agarModel = cosim.AgarModel(.51, .51, .31, 0.1, 500, 6e-4)
     agarModel.setConcentration(10000.0)
     agarModel.initiateModel()
 

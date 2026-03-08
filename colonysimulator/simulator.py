@@ -107,7 +107,7 @@ class ColonyModel:
         print(f"Model for {cellStrain.name} initialized with max growth {self.maxGrowth} and max perish {self.maxPerish}")
         print(f"Deviation from ideal growth: {(self.maxGrowth - idealMaxGrowth) / idealMaxGrowth}, Deviation from ideal perish: {(self.maxPerish - idealMaxPerish) / idealMaxPerish}")
 
-        self.deadMatrix = xp.zeros((agarModel.length, agarModel.width), dtype=xp.int32)
+        self.deadMatrix = xp.zeros((agarModel.length, agarModel.width), dtype=xp.float32)
         self.growingMatrix = xp.zeros((self.bracketCount, agarModel.length, agarModel.width), dtype=xp.float32)
 
         growthWidth = self.maxGrowth + self.maxPerish + 1
@@ -129,18 +129,35 @@ class ColonyModel:
 
     def step(self):
         foodRequired = self.growingMatrix.sum(axis=0) * self.nutrientConsumption * self.agarModel.timeResolution
-        foodAvailable = self.agarModel.nutrientUptakeStep(foodRequired)
+        foodAvailable = self.agarModel.nutrientUptakeStep(foodRequired).astype(xp.float32)
         foodRatio = foodAvailable / foodRequired
         foodRatio = xp.nan_to_num(foodRatio, nan=0.0, posinf=0.0, neginf=0.0)
 
         if self.growthKernel is not None:
             blockSize = (16, 16)
             gridSize = ((self.agarModel.length + blockSize[0] - 1) // blockSize[0], (self.agarModel.width + blockSize[1] - 1) // blockSize[1])
+            #TODO: remove debug prints
+            print(foodRatio)
             self.growthKernel(gridSize, blockSize,
                               (self.growingMatrix, self.postGrowthTemporal, foodRatio, self.binomialDistributionMatrix, self.maxGrowth, self.maxPerish, self.bracketCount, self.agarModel.length, self.agarModel.width))
+            #TODO: remove debug prints
+            print("Food ratio at center:")
             print(foodRatio[self.agarModel.length // 2, self.agarModel.width // 2])
-            print(self.postGrowthTemporal[:, self.agarModel.length // 2, self.agarModel.width // 2].squeeze())
+            print("A priori growth values at center:")
             print(self.growingMatrix[:, self.agarModel.length // 2, self.agarModel.width // 2].squeeze())
+            print("Post-growth temporal values at center:")
+            print(self.postGrowthTemporal[:, self.agarModel.length // 2, self.agarModel.width // 2].squeeze())
+
+            self.deadMatrix += xp.sum(self.postGrowthTemporal[:self.maxPerish, :, :], axis=0)
+            self.growingMatrix = self.postGrowthTemporal[self.maxPerish:self.maxPerish + self.bracketCount, :, :]
+            self.growingMatrix[:self.maxGrowth, :, :] += self.postGrowthTemporal[self.maxPerish + self.bracketCount:, :, :]
+            self.growingMatrix[0, :, :] += xp.sum(self.postGrowthTemporal[self.maxPerish + self.bracketCount:, :, :], axis=0)
+            #TODO: remove debug prints
+            print(self.maxGrowth, self.maxPerish)
+            print("Growing matrix values at center:")
+            print(self.growingMatrix[:, self.agarModel.length // 2, self.agarModel.width // 2].squeeze())
+            print("Sum of post-growth temporal values:")
             print(xp.sum(self.postGrowthTemporal, axis=0))
+
         else:
             print("CPU growth step not implemented yet")

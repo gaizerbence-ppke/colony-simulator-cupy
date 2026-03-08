@@ -14,7 +14,7 @@ extern "C"
         int ypos = blockIdx.y * blockDim.y + threadIdx.y;
         if (xpos >= length || ypos >= width)
             return;
-        int index = xpos * width + ypos;
+        int index = ypos * width + xpos;
         int area = length * width;
         int binomialBufferDimension = maxGrowth + maxPerish + 1;
         
@@ -27,19 +27,25 @@ extern "C"
 
         int binomialStart = 0;
         int binomialSize = 2 * stepsLeft + 1;
-        binomialCoefficients += binomialBufferDimension * (binomialSize - 1);
 
         if (stepsLeft > stepsRight)
         {
-            binomialStart = stepsLeft - stepsRight;
+            binomialStart = center - stepsRight;
             binomialSize = 2 * stepsRight + 1;
         }
+        binomialCoefficients += binomialBufferDimension * (binomialSize - 1);
+        postGrowthTemporal += area * binomialStart + index;
+        growthDistribution += index;
 
+        int temporalLocation, sourceLocation;
         for (int i = 0; i < binomialSize; i++)
         {
             for (int j = 0; j < maturityBrackets; j++)
             {
-                postGrowthTemporal[(binomialStart + i + j) * area + index] += growthDistribution[index + j * area] * binomialCoefficients[i];
+                temporalLocation = (i + j) * area;
+                sourceLocation = j * area;
+
+                postGrowthTemporal[temporalLocation] += growthDistribution[sourceLocation] * binomialCoefficients[i];
             }
         }
     }
