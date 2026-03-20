@@ -10,10 +10,10 @@ def setup_array_backend():
             print("Cuda available")
             return cp, cufft
         else:
-            print("Cuda NOT available, fallback to CPU")
+            print("Cuda NOT available, fallback to CPU (1)")
             return np, scipy.fft
     except (ImportError, Exception):
-        print("Cuda NOT available, fallback to CPU")
+        print("Cuda NOT available, fallback to CPU (2)")
         return np, scipy.fft
 
 xp, xfft = setup_array_backend()

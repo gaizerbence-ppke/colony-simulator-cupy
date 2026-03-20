@@ -136,28 +136,15 @@ class ColonyModel:
         if self.growthKernel is not None:
             blockSize = (16, 16)
             gridSize = ((self.agarModel.length + blockSize[0] - 1) // blockSize[0], (self.agarModel.width + blockSize[1] - 1) // blockSize[1])
-            #TODO: remove debug prints
-            print(foodRatio)
+            
+            self.postGrowthTemporal.fill(0)  # Clear the post-growth temporal array before the kernel call
             self.growthKernel(gridSize, blockSize,
                               (self.growingMatrix, self.postGrowthTemporal, foodRatio, self.binomialDistributionMatrix, self.maxGrowth, self.maxPerish, self.bracketCount, self.agarModel.length, self.agarModel.width))
-            #TODO: remove debug prints
-            print("Food ratio at center:")
-            print(foodRatio[self.agarModel.length // 2, self.agarModel.width // 2])
-            print("A priori growth values at center:")
-            print(self.growingMatrix[:, self.agarModel.length // 2, self.agarModel.width // 2].squeeze())
-            print("Post-growth temporal values at center:")
-            print(self.postGrowthTemporal[:, self.agarModel.length // 2, self.agarModel.width // 2].squeeze())
 
             self.deadMatrix += xp.sum(self.postGrowthTemporal[:self.maxPerish, :, :], axis=0)
-            self.growingMatrix = self.postGrowthTemporal[self.maxPerish:self.maxPerish + self.bracketCount, :, :]
+            self.growingMatrix = self.postGrowthTemporal[self.maxPerish:self.maxPerish + self.bracketCount, :, :].copy()
             self.growingMatrix[:self.maxGrowth, :, :] += self.postGrowthTemporal[self.maxPerish + self.bracketCount:, :, :]
-            self.growingMatrix[0, :, :] += xp.sum(self.postGrowthTemporal[self.maxPerish + self.bracketCount:, :, :], axis=0)
-            #TODO: remove debug prints
-            print(self.maxGrowth, self.maxPerish)
-            print("Growing matrix values at center:")
-            print(self.growingMatrix[:, self.agarModel.length // 2, self.agarModel.width // 2].squeeze())
-            print("Sum of post-growth temporal values:")
-            print(xp.sum(self.postGrowthTemporal, axis=0))
+            self.growingMatrix[0, :, :] += xp.sum(self.postGrowthTemporal[self.maxPerish + self.bracketCount:, :, :], axis=0)           
 
         else:
             print("CPU growth step not implemented yet")

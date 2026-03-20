@@ -15,8 +15,9 @@ def test_colonyModel():
     colonyModel = cosim.ColonyModel(agarModel, bracketCount, strain)
 
     colonyModel.initiateSingleCellAtCenter()
-    colonyModel.step()
-
+    for _ in range(100):
+        colonyModel.step()
+        agarModel.diffusionStep()
     print(xp.sum(colonyModel.growingMatrix, axis=2))
 
     assert True
