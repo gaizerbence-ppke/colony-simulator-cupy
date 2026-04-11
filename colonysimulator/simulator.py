@@ -85,11 +85,12 @@ class AgarModel:
         if axisInt == 2:
             return self._concentrationMap[:, :, index]
 class CellStrain:
-    def __init__(self, name, divisionTime, nutrientUptake, nutrientConsumption):
+    def __init__(self, name, divisionTime, nutrientUptake, nutrientConsumption, volume):
         self.name = name
         self.divisionTime = divisionTime
         self.nutrientUptake = nutrientUptake
         self.nutrientConsumption = nutrientConsumption
+        self.volume = volume
 class ColonyModel:
     def __init__(self, agarModel, bracketCount, cellStrain):
         self.agarModel = agarModel
@@ -97,6 +98,7 @@ class ColonyModel:
         self.divisionTime = cellStrain.divisionTime
         self.nutrientUptake = cellStrain.nutrientUptake
         self.nutrientConsumption = cellStrain.nutrientConsumption
+        self.maximumCellsPerVoxel = self.agarModel.spatialResolution**2 * 5e-3 / cellStrain.volume
 
         idealMaxGrowth = bracketCount * self.divisionTime / agarModel.timeResolution
         idealMaxPerish = idealMaxGrowth * (self.nutrientUptake / self.nutrientConsumption - 1)
@@ -132,7 +134,7 @@ class ColonyModel:
         foodAvailable = self.agarModel.nutrientUptakeStep(foodRequired).astype(xp.float32)
         foodRatio = foodAvailable / foodRequired
         foodRatio = xp.nan_to_num(foodRatio, nan=0.0, posinf=0.0, neginf=0.0)
-
+        diagonal = 0.7071
         if self.growthKernel is not None:
             blockSize = (16, 16)
             gridSize = ((self.agarModel.length + blockSize[0] - 1) // blockSize[0], (self.agarModel.width + blockSize[1] - 1) // blockSize[1])
@@ -143,8 +145,44 @@ class ColonyModel:
 
             self.deadMatrix += xp.sum(self.postGrowthTemporal[:self.maxPerish, :, :], axis=0)
             self.growingMatrix = self.postGrowthTemporal[self.maxPerish:self.maxPerish + self.bracketCount, :, :].copy()
-            self.growingMatrix[:self.maxGrowth, :, :] += self.postGrowthTemporal[self.maxPerish + self.bracketCount:, :, :]
-            self.growingMatrix[0, :, :] += xp.sum(self.postGrowthTemporal[self.maxPerish + self.bracketCount:, :, :], axis=0)           
+            self.growingMatrix[:self.maxGrowth, :, :] += self.postGrowthTemporal[self.maxPerish + self.bracketCount:, :, :]           
+
+            overFlowMask = xp.sum(self.growingMatrix, axis=0) + self.deadMatrix > self.maximumCellsPerVoxel
+            blockedNorth = xp.roll(overFlowMask, -1, axis=0)
+            blockedSouth = xp.roll(overFlowMask, 1, axis=0)
+            blockedEast = xp.roll(overFlowMask, -1, axis=1)
+            blockedWest = xp.roll(overFlowMask, 1, axis=1)
+            blockedNorthWest = xp.roll(overFlowMask, (1, 1), axis=(0, 1))
+            blockedSouthEast = xp.roll(overFlowMask, (-1, -1), axis=(0, 1))
+            blockedSouthWest = xp.roll(overFlowMask, (1, -1), axis=(0, 1))
+            blockedNorthEast = xp.roll(overFlowMask, (-1, 1), axis=(0, 1))
+
+            flowDirections =  (1 - blockedNorth).astype(xp.float32) \
+                            + (1 - blockedSouth).astype(xp.float32) \
+                            + (1 - blockedEast).astype(xp.float32) \
+                            + (1 - blockedWest).astype(xp.float32) \
+                            + (1 - blockedNorthWest).astype(xp.float32) * diagonal \
+                            + (1 - blockedSouthEast).astype(xp.float32) * diagonal \
+                            + (1 - blockedSouthWest).astype(xp.float32) * diagonal \
+                            + (1 - blockedNorthEast).astype(xp.float32) * diagonal
+
+            flowDirections *= overFlowMask.astype(xp.float32)
+
+            newCells = xp.sum(self.postGrowthTemporal[self.maxPerish + self.bracketCount:, :, :], axis=0)
+            
+            outFlowPerDirection = newCells / flowDirections
+            outFlowPerDirection = xp.nan_to_num(outFlowPerDirection, nan=0.0, posinf=0.0, neginf=0.0)
+
+            self.growingMatrix[0, :, :] += xp.roll(outFlowPerDirection, 1, axis=0) * (1 - blockedNorth)
+            self.growingMatrix[0, :, :] += xp.roll(outFlowPerDirection, -1, axis=0) * (1 - blockedSouth)
+            self.growingMatrix[0, :, :] += xp.roll(outFlowPerDirection, 1, axis=1) * (1 - blockedEast)
+            self.growingMatrix[0, :, :] += xp.roll(outFlowPerDirection, -1, axis=1) * (1 - blockedWest)
+            self.growingMatrix[0, :, :] += xp.roll(outFlowPerDirection, (-1, -1), axis=(0, 1)) * (1 - blockedNorthWest) * diagonal
+            self.growingMatrix[0, :, :] += xp.roll(outFlowPerDirection, (1, 1), axis=(0, 1)) * (1 - blockedSouthEast) * diagonal
+            self.growingMatrix[0, :, :] += xp.roll(outFlowPerDirection, (-1, 1), axis=(0, 1)) * (1 - blockedSouthWest) * diagonal
+            self.growingMatrix[0, :, :] += xp.roll(outFlowPerDirection, (1, -1), axis=(0, 1)) * (1 - blockedNorthEast) * diagonal
+
+            self.growingMatrix[0, :, :] += newCells * (flowDirections == 0)
 
         else:
             print("CPU growth step not implemented yet")

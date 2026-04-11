@@ -1,3 +1,4 @@
 pytest
 cupy-cuda12x
 scipy
+Pillow
