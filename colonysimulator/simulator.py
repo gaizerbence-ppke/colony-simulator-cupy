@@ -26,7 +26,7 @@ class AgarModel:
         self._diffusionKernel = None
 
     def setConcentration(self, concentration):
-        self._concentrationMap[:, :, :] = concentration
+        self._concentrationMap[:, :, :] = concentration * self.spatialResolution**3 * 1e-3
 
     def initiateModel(self):
         self._spectralMap = xfft.dctn(self._concentrationMap, norm="ortho")
@@ -100,8 +100,8 @@ class ColonyModel:
         self.nutrientConsumption = cellStrain.nutrientConsumption
         self.maximumCellsPerVoxel = self.agarModel.spatialResolution**2 * 5e-3 / cellStrain.volume
 
-        idealMaxGrowth = bracketCount * self.divisionTime / agarModel.timeResolution
-        idealMaxPerish = idealMaxGrowth * (self.nutrientUptake / self.nutrientConsumption - 1)
+        idealMaxGrowth = bracketCount / (self.divisionTime / agarModel.timeResolution)
+        idealMaxPerish = (idealMaxGrowth + bracketCount) * (self.nutrientConsumption / (self.nutrientUptake - self.nutrientConsumption))
 
         self.maxGrowth = round(idealMaxGrowth)
         self.maxPerish = round(idealMaxPerish)
