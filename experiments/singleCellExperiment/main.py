@@ -46,7 +46,7 @@ if __name__ == "__main__":
         if i % meanWhileFrequency == meanWhileFrequency - 1:
             print(f"Step {i+1}, total cells: {xp.sum(colonyModel.growingMatrix) + xp.sum(colonyModel.deadMatrix)}")
             cellMass = xp.sum(colonyModel.growingMatrix, axis=0) + colonyModel.deadMatrix
-            cellMass = xp.clip(cellMass / colonyModel.maximumCellsPerVoxel, 0, 1)
+            cellMass = xp.clip(cellMass / colonyModel.maximumCellsPerVoxel, 0, 255)
             result = Image.fromarray((cellMass * 255).get().astype(xp.uint8))
             #result.save(f"colony_step_{i+1}.png")
             meanwhileImages.append(result)

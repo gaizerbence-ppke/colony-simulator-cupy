@@ -2,6 +2,7 @@ from colonysimulator.utility import initialize_binomial_distribution_matrix, set
 import os
 
 xp, xfft = setup_array_backend()
+import cupyx.scipy.ndimage as ndimage
 
 class CellSimulationModel:
     def __init__(self):
@@ -130,11 +131,12 @@ class ColonyModel:
         self.growingMatrix[0, centerX, centerY] = 1
 
     def step(self):
+        SPREAD_SIZE = 5e-2 # mm
+
         foodRequired = self.growingMatrix.sum(axis=0) * self.nutrientConsumption * self.agarModel.timeResolution
         foodAvailable = self.agarModel.nutrientUptakeStep(foodRequired).astype(xp.float32)
         foodRatio = foodAvailable / foodRequired
         foodRatio = xp.nan_to_num(foodRatio, nan=0.0, posinf=0.0, neginf=0.0)
-        diagonal = 0.7071
         if self.growthKernel is not None:
             blockSize = (16, 16)
             gridSize = ((self.agarModel.length + blockSize[0] - 1) // blockSize[0], (self.agarModel.width + blockSize[1] - 1) // blockSize[1])
@@ -145,44 +147,12 @@ class ColonyModel:
 
             self.deadMatrix += xp.sum(self.postGrowthTemporal[:self.maxPerish, :, :], axis=0)
             self.growingMatrix = self.postGrowthTemporal[self.maxPerish:self.maxPerish + self.bracketCount, :, :].copy()
-            self.growingMatrix[:self.maxGrowth, :, :] += self.postGrowthTemporal[self.maxPerish + self.bracketCount:, :, :]           
-
-            overFlowMask = xp.sum(self.growingMatrix, axis=0) + self.deadMatrix > self.maximumCellsPerVoxel
-            blockedNorth = xp.roll(overFlowMask, -1, axis=0)
-            blockedSouth = xp.roll(overFlowMask, 1, axis=0)
-            blockedEast = xp.roll(overFlowMask, -1, axis=1)
-            blockedWest = xp.roll(overFlowMask, 1, axis=1)
-            blockedNorthWest = xp.roll(overFlowMask, (1, 1), axis=(0, 1))
-            blockedSouthEast = xp.roll(overFlowMask, (-1, -1), axis=(0, 1))
-            blockedSouthWest = xp.roll(overFlowMask, (1, -1), axis=(0, 1))
-            blockedNorthEast = xp.roll(overFlowMask, (-1, 1), axis=(0, 1))
-
-            flowDirections =  (1 - blockedNorth).astype(xp.float32) \
-                            + (1 - blockedSouth).astype(xp.float32) \
-                            + (1 - blockedEast).astype(xp.float32) \
-                            + (1 - blockedWest).astype(xp.float32) \
-                            + (1 - blockedNorthWest).astype(xp.float32) * diagonal \
-                            + (1 - blockedSouthEast).astype(xp.float32) * diagonal \
-                            + (1 - blockedSouthWest).astype(xp.float32) * diagonal \
-                            + (1 - blockedNorthEast).astype(xp.float32) * diagonal
-
-            flowDirections *= overFlowMask.astype(xp.float32)
+            self.growingMatrix[:self.maxGrowth, :, :] += self.postGrowthTemporal[self.maxPerish + self.bracketCount:, :, :]
 
             newCells = xp.sum(self.postGrowthTemporal[self.maxPerish + self.bracketCount:, :, :], axis=0)
-            
-            outFlowPerDirection = newCells / flowDirections
-            outFlowPerDirection = xp.nan_to_num(outFlowPerDirection, nan=0.0, posinf=0.0, neginf=0.0)
+            newCells = ndimage.gaussian_filter(newCells, sigma=SPREAD_SIZE / self.agarModel.spatialResolution)
 
-            self.growingMatrix[0, :, :] += xp.roll(outFlowPerDirection, 1, axis=0) * (1 - blockedNorth)
-            self.growingMatrix[0, :, :] += xp.roll(outFlowPerDirection, -1, axis=0) * (1 - blockedSouth)
-            self.growingMatrix[0, :, :] += xp.roll(outFlowPerDirection, 1, axis=1) * (1 - blockedEast)
-            self.growingMatrix[0, :, :] += xp.roll(outFlowPerDirection, -1, axis=1) * (1 - blockedWest)
-            self.growingMatrix[0, :, :] += xp.roll(outFlowPerDirection, (-1, -1), axis=(0, 1)) * (1 - blockedNorthWest) * diagonal
-            self.growingMatrix[0, :, :] += xp.roll(outFlowPerDirection, (1, 1), axis=(0, 1)) * (1 - blockedSouthEast) * diagonal
-            self.growingMatrix[0, :, :] += xp.roll(outFlowPerDirection, (-1, 1), axis=(0, 1)) * (1 - blockedSouthWest) * diagonal
-            self.growingMatrix[0, :, :] += xp.roll(outFlowPerDirection, (1, -1), axis=(0, 1)) * (1 - blockedNorthEast) * diagonal
-
-            self.growingMatrix[0, :, :] += newCells * (flowDirections == 0)
+            self.growingMatrix[0, :, :] += newCells
 
         else:
             print("CPU growth step not implemented yet")
