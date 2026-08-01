@@ -5,12 +5,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 import colonysimulator.simulator as cosim
-from colonysimulator.utility import setup_array_backend
 
 from PIL import Image
 import numpy as np
 
-xp, xfft = setup_array_backend()
+import cupy as cp
+import cupyx.scipy.fftpack as cufft
 
 meanwhileImages = []
 meanWhileFrequency = 100
@@ -44,16 +44,16 @@ if __name__ == "__main__":
         colonyModel.step()
         agarModel.diffusionStep()
         if i % meanWhileFrequency == meanWhileFrequency - 1:
-            print(f"Step {i+1}, total cells: {xp.sum(colonyModel.growingMatrix) + xp.sum(colonyModel.deadMatrix)}")
-            cellMass = xp.sum(colonyModel.growingMatrix, axis=0) + colonyModel.deadMatrix
-            cellMass = xp.clip(cellMass / colonyModel.maximumCellsPerVoxel, 0, 1)
-            result = Image.fromarray((cellMass * 255).get().astype(xp.uint8))
+            print(f"Step {i+1}, total cells: {cp.sum(colonyModel.growingMatrix) + cp.sum(colonyModel.deadMatrix)}")
+            cellMass = cp.sum(colonyModel.growingMatrix, axis=0) + colonyModel.deadMatrix
+            cellMass = cp.clip(cellMass / colonyModel.maximumCellsPerVoxel, 0, 1)
+            result = Image.fromarray((cellMass * 255).get().astype(cp.uint8))
             #result.save(f"colony_step_{i+1}.png")
             meanwhileImages.append(result)
 
-    cellMass = xp.sum(colonyModel.growingMatrix, axis=0) + colonyModel.deadMatrix
-    cellMass = xp.clip(cellMass / colonyModel.maximumCellsPerVoxel, 0, 1)
-    result = Image.fromarray((cellMass * 255).get().astype(xp.uint8))
+    cellMass = cp.sum(colonyModel.growingMatrix, axis=0) + colonyModel.deadMatrix
+    cellMass = cp.clip(cellMass / colonyModel.maximumCellsPerVoxel, 0, 1)
+    result = Image.fromarray((cellMass * 255).get().astype(cp.uint8))
     result.save("colony_result.png")
     meanwhileImages[0].save("colony_growth.gif", save_all=True, append_images=meanwhileImages[1:], duration=200, loop=0)
     import matplotlib.pyplot as plt

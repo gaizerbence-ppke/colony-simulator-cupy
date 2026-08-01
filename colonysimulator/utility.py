@@ -1,25 +1,7 @@
-import numpy as np
-import scipy.fft
-
-def setup_array_backend():
-    try:
-        import cupy as cp
-        import cupyx.scipy.fft as cufft
-        
-        if cp.is_available():
-            print("Cuda available")
-            return cp, cufft
-        else:
-            print("Cuda NOT available, fallback to CPU (1)")
-            return np, scipy.fft
-    except (ImportError, Exception):
-        print("Cuda NOT available, fallback to CPU (2)")
-        return np, scipy.fft
-
-xp, xfft = setup_array_backend()
+import cupy as cp
 
 def initialize_binomial_distribution_matrix(N):
-    binomialDistributionMatrix = xp.zeros((N, N), dtype=xp.float32)
+    binomialDistributionMatrix = cp.zeros((N, N), dtype=cp.float32)
     binomialDistributionMatrix[0, 0] = 1.0
     for n in range(1, N):
         for k in range(n + 1):
