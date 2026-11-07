@@ -146,9 +146,11 @@ class ColonyModel:
         self.growingMatrix[0, centerX, centerY] = 1
 
     def step(self):
-        foodRequired = self.growingMatrix.sum(axis=0) * self.nutrientConsumption * self.agarModel.timeResolution
+        # Demand is based on maximum uptake, so foodRatio is the fraction of maximal uptake a cell
+        # receives (1 = full growth; nutrientConsumption / nutrientUptake = maintenance only).
+        foodRequired = self.growingMatrix.sum(axis=0) * self.nutrientUptake * self.agarModel.timeResolution
         foodAvailable = self.agarModel.nutrientUptakeStep(foodRequired).astype(cp.float32)
-        foodRatio = foodAvailable / foodRequired
+        foodRatio = (foodAvailable / foodRequired).astype(cp.float32)
         foodRatio = cp.nan_to_num(foodRatio, nan=0.0, posinf=0.0, neginf=0.0)
         diagonal = 0.7071
         if self.growthKernel is not None:
