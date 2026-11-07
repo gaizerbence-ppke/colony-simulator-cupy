@@ -1,0 +1,5 @@
+[tool.pytest.ini_options]
+# Make the repository root importable, so `import colonysimulator` works however
+# pytest is started (plain `pytest`, `python -m pytest`, IDE test runners).
+pythonpath = ["."]
+testpaths = ["tests"]
