@@ -14,7 +14,7 @@ extern "C"
         int ypos = blockIdx.y * blockDim.y + threadIdx.y;
         if (xpos >= length || ypos >= width)
             return;
-        int index = ypos * width + xpos;
+        int index = xpos * width + ypos;  // arrays are C-ordered (length, width)
         int area = length * width;
         int binomialBufferDimension = maxGrowth + maxPerish + 1;
         
