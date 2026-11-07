@@ -6,6 +6,16 @@ import cupyx.scipy.fft as cufft
 import numpy as np
 import scipy.fft as spfft
 
+
+def _neighbour(array, dx, dy, fill):
+    """Return b with b[i, j] = array[i + dx, j + dy]; positions outside the plate get `fill`.
+
+    Unlike cp.roll, nothing wraps around the plate edges.
+    """
+    length, width = array.shape
+    padded = cp.pad(array, 1, mode="constant", constant_values=fill)
+    return padded[1 + dx:1 + dx + length, 1 + dy:1 + dy + width]
+
 class CellSimulationModel:
     def __init__(self):
         pass
@@ -154,39 +164,28 @@ class ColonyModel:
             self.growingMatrix[:self.maxGrowth, :, :] += self.postGrowthTemporal[self.maxPerish + self.bracketCount:, :, :]           
 
             overFlowMask = cp.sum(self.growingMatrix, axis=0) + self.deadMatrix > self.maximumCellsPerVoxel
-            blockedNorth = cp.roll(overFlowMask, -1, axis=0)
-            blockedSouth = cp.roll(overFlowMask, 1, axis=0)
-            blockedEast = cp.roll(overFlowMask, -1, axis=1)
-            blockedWest = cp.roll(overFlowMask, 1, axis=1)
-            blockedNorthWest = cp.roll(overFlowMask, (1, 1), axis=(0, 1))
-            blockedSouthEast = cp.roll(overFlowMask, (-1, -1), axis=(0, 1))
-            blockedSouthWest = cp.roll(overFlowMask, (1, -1), axis=(0, 1))
-            blockedNorthEast = cp.roll(overFlowMask, (-1, 1), axis=(0, 1))
-
-            flowDirections =  (1 - blockedNorth).astype(cp.float32) \
-                            + (1 - blockedSouth).astype(cp.float32) \
-                            + (1 - blockedEast).astype(cp.float32) \
-                            + (1 - blockedWest).astype(cp.float32) \
-                            + (1 - blockedNorthWest).astype(cp.float32) * diagonal \
-                            + (1 - blockedSouthEast).astype(cp.float32) * diagonal \
-                            + (1 - blockedSouthWest).astype(cp.float32) * diagonal \
-                            + (1 - blockedNorthEast).astype(cp.float32) * diagonal
-
-            flowDirections *= overFlowMask.astype(cp.float32)
-
             newCells = cp.sum(self.postGrowthTemporal[self.maxPerish + self.bracketCount:, :, :], axis=0)
+
+            # Directions as (offset along length, offset along width, weight).
+            # A direction is blocked if the target voxel overflows or lies outside the plate.
+            directions = ((1, 0, 1.0), (-1, 0, 1.0), (0, 1, 1.0), (0, -1, 1.0),
+                          (-1, -1, diagonal), (1, 1, diagonal), (-1, 1, diagonal), (1, -1, diagonal))
+            openFlags = [(1 - _neighbour(overFlowMask, dx, dy, fill=True)).astype(cp.float32)
+                         for dx, dy, _ in directions]
+
+            flowDirections = cp.zeros_like(newCells)
+            for (_, _, weight), isOpen in zip(directions, openFlags):
+                flowDirections += isOpen * weight
+            flowDirections *= overFlowMask.astype(cp.float32)
 
             outFlowPerDirection = newCells / flowDirections
             outFlowPerDirection = cp.nan_to_num(outFlowPerDirection, nan=0.0, posinf=0.0, neginf=0.0)
 
-            self.growingMatrix[0, :, :] += cp.roll(outFlowPerDirection, 1, axis=0) * (1 - blockedNorth)
-            self.growingMatrix[0, :, :] += cp.roll(outFlowPerDirection, -1, axis=0) * (1 - blockedSouth)
-            self.growingMatrix[0, :, :] += cp.roll(outFlowPerDirection, 1, axis=1) * (1 - blockedEast)
-            self.growingMatrix[0, :, :] += cp.roll(outFlowPerDirection, -1, axis=1) * (1 - blockedWest)
-            self.growingMatrix[0, :, :] += cp.roll(outFlowPerDirection, (-1, -1), axis=(0, 1)) * (1 - blockedNorthWest) * diagonal
-            self.growingMatrix[0, :, :] += cp.roll(outFlowPerDirection, (1, 1), axis=(0, 1)) * (1 - blockedSouthEast) * diagonal
-            self.growingMatrix[0, :, :] += cp.roll(outFlowPerDirection, (-1, 1), axis=(0, 1)) * (1 - blockedSouthWest) * diagonal
-            self.growingMatrix[0, :, :] += cp.roll(outFlowPerDirection, (1, -1), axis=(0, 1)) * (1 - blockedNorthEast) * diagonal
+            # Each overflowing source sends to its open neighbours; the amount sent is
+            # computed at the source and then moved to the target, so cells are conserved.
+            for (dx, dy, weight), isOpen in zip(directions, openFlags):
+                sent = outFlowPerDirection * isOpen * weight
+                self.growingMatrix[0, :, :] += _neighbour(sent, -dx, -dy, fill=0)
 
             self.growingMatrix[0, :, :] += newCells * (flowDirections == 0)
 
