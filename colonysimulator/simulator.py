@@ -72,7 +72,7 @@ class AgarModel:
         return nutrientTakenMap
     
     def refreshConcentrationMap(self):
-        self._concentrationMap = cufft.idctn(self._spectralMap)
+        self._concentrationMap = cufft.idctn(self._spectralMap, norm="ortho")
 
     def getConcentrationMapSlice(self, axis, index):
         axisInt = int(axis)
