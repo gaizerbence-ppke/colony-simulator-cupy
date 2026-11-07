@@ -47,20 +47,23 @@ class AgarModel:
         self._spectralMap *= self._diffusionKernel
 
 
-    def _topLayerInverseTransform(self):
-        n = cp.arange(self.depth)
-        basisVector = cp.cos(cp.pi * n / 2 / self.depth)
-        basisVector[0] = 1 / cp.sqrt(2)
-        reduced_2d = cp.tensordot(self._spectralMap, basisVector, axes=([2], [0]))
-        return cufft.idctn(reduced_2d, norm="ortho") / cp.sqrt(5)
-
-    def _topLayerSparseTransform(self, layer):
-        transformedLayer = cufft.dctn(layer, norm="ortho")
+    def _topLayerBasis(self):
+        # Row z = 0 of the orthonormal DCT-II along depth: s_k * cos(pi * k / (2 * depth)),
+        # with s_0 = sqrt(1 / depth) and s_k = sqrt(2 / depth) for k > 0.
         freqIndices = cp.arange(self.depth)
         basisVector = cp.cos(cp.pi * freqIndices / 2 / self.depth)
         scaling = cp.full(self.depth, cp.sqrt(2.0 / self.depth))
         scaling[0] = cp.sqrt(1.0 / self.depth)
-        basisVector *= scaling
+        return basisVector * scaling
+
+    def _topLayerInverseTransform(self):
+        # Exact reconstruction of the top agar layer (z = 0) from the 3D spectrum.
+        reduced_2d = cp.tensordot(self._spectralMap, self._topLayerBasis(), axes=([2], [0]))
+        return cufft.idctn(reduced_2d, norm="ortho")
+
+    def _topLayerSparseTransform(self, layer):
+        transformedLayer = cufft.dctn(layer, norm="ortho")
+        basisVector = self._topLayerBasis()
         return transformedLayer[:, :, cp.newaxis] * basisVector[cp.newaxis, cp.newaxis, :]
 
     def nutrientUptakeStep(self, nutrientRequired):
