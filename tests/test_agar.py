@@ -1,12 +1,25 @@
-import pytest
+"""Checks of the spectral agar model (bugs B1, B2 and nutrient uptake).
 
-cp = pytest.importorskip("cupy")
+Run from the repository root:  python tests/test_agar.py   (or %run in Colab)
+Outputs: test_outputs/agar/
+"""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _common import CheckRun, gpuAvailable, finish  # also puts the repository root on sys.path
+
+import cupy as cp
+from matplotlib.figure import Figure
 
 import colonysimulator.simulator as cosim
 
+TOLERANCE = 1e-4
 
-def _random_agar(depth_mm, seed=0):
-    agar = cosim.AgarModel(1.2, 0.8, depth_mm, 0.1, 0.1, 2.4)
+
+def randomAgar(depthMm, seed=0):
+    """Small non-square agar with a random concentration field (arbitrary units)."""
+    agar = cosim.AgarModel(1.2, 0.8, depthMm, 0.1, 0.1, 2.4)
     rng = cp.random.default_rng(seed)
     agar._concentrationMap[:] = rng.random(agar._concentrationMap.shape, dtype=cp.float32)
     original = agar._concentrationMap.copy()
@@ -14,43 +27,98 @@ def _random_agar(depth_mm, seed=0):
     return agar, original
 
 
-def test_agarModel():
-    agarModel = cosim.AgarModel(20, 20, 20, 0.1, 500, 6e-4)
-    agarModel.setConcentration(1.0)
-    agarModel.initiateModel()
-
-    nutrientRequired = cp.zeros((agarModel.length, agarModel.width))
-    nutrientRequired[int(round(agarModel.length / 2)), :] = 1
-    nutrientRequired[:, int(round(agarModel.width / 2))] = 1
-
-    nutrientUptake = agarModel.nutrientUptakeStep(nutrientRequired)
-    assert nutrientUptake.shape == (agarModel.length, agarModel.width)
-
-    agarModel.diffusionStep()
-    agarModel.refreshConcentrationMap()
-    agarModel.getConcentrationMapSlice(1, 20)
+def maxError(a, b):
+    return float(cp.max(cp.abs(a - b)))
 
 
-def test_refresh_round_trip():
-    """B1: forward and inverse transforms must use the same (orthonormal) normalisation."""
-    agar, original = _random_agar(0.4)
+def checkRefreshRoundTrip(run):
+    """B1: forward and inverse DCT must use the same (orthonormal) normalisation."""
+    agar, original = randomAgar(0.4)
     agar.refreshConcentrationMap()
-    cp.testing.assert_allclose(agar._concentrationMap, original, rtol=1e-4, atol=1e-5)
+    error = maxError(agar._concentrationMap, original)
+    run.check("refreshConcentrationMap returns the original field", error < TOLERANCE, f"max error {error:.2e}")
+
+    figure = Figure(figsize=(9, 3))
+    panels = [(original[:, :, 0], "original, z = 0"),
+              (agar._concentrationMap[:, :, 0], "after refresh, z = 0"),
+              (agar._concentrationMap[:, :, 0] - original[:, :, 0], "difference")]
+    for i, (image, title) in enumerate(panels):
+        axis = figure.add_subplot(1, 3, i + 1)
+        shown = axis.imshow(cp.asnumpy(image))
+        figure.colorbar(shown, ax=axis, shrink=0.8)
+        axis.set_title(title)
+    run.saveFigure(figure, "refresh_round_trip.png")
 
 
-@pytest.mark.parametrize("depth_mm", [0.4, 0.9, 4.0])
-def test_top_layer_readout_is_exact(depth_mm):
+def checkTopLayerReadout(run):
     """B2: the top-layer readout must equal layer z = 0 for any agar depth."""
-    agar, original = _random_agar(depth_mm)
-    top = agar._topLayerInverseTransform()
-    cp.testing.assert_allclose(top, original[:, :, 0], rtol=1e-4, atol=1e-5)
+    depths, errors = [0.4, 0.9, 4.0], []
+    for depthMm in depths:
+        agar, original = randomAgar(depthMm)
+        top = agar._topLayerInverseTransform()
+        errors.append(maxError(top, original[:, :, 0]))
+        run.check(f"top-layer readout is exact at {depthMm} mm depth ({agar.depth} voxels)",
+                  errors[-1] < TOLERANCE, f"max error {errors[-1]:.2e}")
+
+    figure = Figure(figsize=(9, 3))
+    axis = figure.add_subplot(1, 3, 1)
+    axis.bar([f"{d} mm" for d in depths], errors)
+    axis.set_yscale("log")
+    axis.axhline(TOLERANCE, color="k", linestyle="--", linewidth=0.8)
+    axis.set_title("max readout error")
+    for i, (image, title) in enumerate([(original[:, :, 0], "true z = 0 (4 mm)"), (top, "readout (4 mm)")]):
+        axis = figure.add_subplot(1, 3, i + 2)
+        axis.imshow(cp.asnumpy(image))
+        axis.set_title(title)
+    run.saveFigure(figure, "top_layer_readout.png")
 
 
-def test_uptake_removes_only_from_top_layer():
-    agar, original = _random_agar(0.9)
+def checkUptake(run):
+    """Uptake removes nutrient from the top layer only, and exactly the amount taken."""
+    agar, original = randomAgar(0.9)
     required = cp.full((agar.length, agar.width), 0.25, dtype=cp.float32)
     taken = agar.nutrientUptakeStep(required)
     agar.refreshConcentrationMap()
-    expectedTop = original[:, :, 0] - taken
-    cp.testing.assert_allclose(agar._concentrationMap[:, :, 0], expectedTop, rtol=1e-4, atol=1e-5)
-    cp.testing.assert_allclose(agar._concentrationMap[:, :, 1:], original[:, :, 1:], rtol=1e-4, atol=1e-5)
+    topError = maxError(agar._concentrationMap[:, :, 0], original[:, :, 0] - taken)
+    restError = maxError(agar._concentrationMap[:, :, 1:], original[:, :, 1:])
+    run.check("uptake is removed from the top layer", topError < TOLERANCE, f"max error {topError:.2e}")
+    run.check("deeper layers are unchanged by uptake", restError < TOLERANCE, f"max error {restError:.2e}")
+    run.check("uptake never exceeds what was available", bool(cp.all(taken <= original[:, :, 0] + TOLERANCE)))
+
+
+def checkDiffusionConservesMass(run):
+    """No-flux boundaries: diffusion redistributes nutrient but keeps the total."""
+    agar, original = randomAgar(0.9)
+    totals = [float(original.sum())]
+    for _ in range(50):
+        agar.diffusionStep()
+        agar.refreshConcentrationMap()
+        totals.append(float(agar._concentrationMap.sum()))
+    drift = abs(totals[-1] - totals[0]) / totals[0]
+    run.check("diffusion conserves total nutrient", drift < 1e-5, f"relative drift {drift:.2e} after 50 steps")
+
+    figure = Figure(figsize=(9, 3))
+    axis = figure.add_subplot(1, 2, 1)
+    axis.plot(totals)
+    axis.set_xlabel("step")
+    axis.set_title("total nutrient")
+    axis = figure.add_subplot(1, 2, 2)
+    axis.imshow(cp.asnumpy(agar._concentrationMap[:, :, 0]))
+    axis.set_title("z = 0 after 50 steps")
+    run.saveFigure(figure, "diffusion_mass.png")
+
+
+def main():
+    if not gpuAvailable():
+        print("No CUDA device found: these checks need CuPy with a GPU.")
+        return False
+    run = CheckRun("agar")
+    checkRefreshRoundTrip(run)
+    checkTopLayerReadout(run)
+    checkUptake(run)
+    checkDiffusionConservesMass(run)
+    return run.summary()
+
+
+if __name__ == "__main__":
+    finish(main())

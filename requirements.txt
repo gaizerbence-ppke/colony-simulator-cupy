@@ -1,4 +1,5 @@
-pytest
 cupy-cuda12x
+numpy
 scipy
 Pillow
+matplotlib
