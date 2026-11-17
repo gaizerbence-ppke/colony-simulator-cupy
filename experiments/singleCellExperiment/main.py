@@ -22,7 +22,7 @@ if __name__ == "__main__":
                                  spatialResolution= 0.1, \
                                  timeResolution= 0.1, \
                                  diffusionCoefficient= 2.4) # mm^2 / h 
-    agarModel.setConcentration(2.0 / 100) # g / ml
+    agarModel.setConcentration(.1 / 1000) # g / ml
     agarModel.initiateModel()
 
     idealCellUptake = 15 # mmol / gDW / h
