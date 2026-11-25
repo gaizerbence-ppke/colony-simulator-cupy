@@ -4,6 +4,8 @@ Run from anywhere once the package is installed (`pip install -e .`):
     python validation/step1_data_layout.py
 Prints numbers to inspect and writes figures to validation_outputs/step1/.
 """
+from __future__ import annotations
+
 import time
 from pathlib import Path
 
@@ -23,7 +25,7 @@ GLUCOSE_MOLECULAR_WEIGHT = 180e-3  # g / mmol
 CELL_DRY_WEIGHT = 1e-12            # g
 
 
-def make_strains():
+def make_strains() -> list[CellStrain]:
     m_max = 15 * CELL_DRY_WEIGHT * GLUCOSE_MOLECULAR_WEIGHT
     consumption = 0.3 * CELL_DRY_WEIGHT * GLUCOSE_MOLECULAR_WEIGHT
     fast = CellStrain("fast", division_time=1.75, m_max=m_max, km=0.5e-3,
@@ -33,7 +35,7 @@ def make_strains():
     return [fast, slow]
 
 
-def geometry_report():
+def geometry_report() -> None:
     print("--- geometry")
     omnitray = PlateGeometry.rectangular(128, 86, 4, spatial_resolution=0.084,
                                          layer_height=0.1, max_colony_height=3)
@@ -62,7 +64,7 @@ def geometry_report():
               f"capacity per voxel {caps[0]:.0f} / {caps[1]:.0f} cells")
 
 
-def layout_report():
+def layout_report() -> None:
     print("--- colony state and totals")
     geometry = PlateGeometry.rectangular(8, 6, 2, spatial_resolution=0.1, layer_height=0.02,
                                          max_colony_height=0.5)
@@ -104,7 +106,7 @@ def layout_report():
     plt.close(figure)
 
 
-def streaming_round_trip():
+def streaming_round_trip() -> None:
     print("--- streaming round trip")
     geometry = PlateGeometry.rectangular(8, 6, 2, spatial_resolution=0.1, layer_height=0.02,
                                          max_colony_height=0.5)
@@ -114,7 +116,7 @@ def streaming_round_trip():
     colony.active_layers = colony.n_layers
     expected = colony.living * 2 + np.arange(colony.n_layers, dtype=np.float32)[:, None, None, None, None]
 
-    def transform(chunk, layers):
+    def transform(chunk: cp.ndarray, layers: slice) -> float:
         chunk *= 2
         chunk += cp.arange(layers.start, layers.stop, dtype=cp.float32)[:, None, None, None, None]
         return float(chunk.sum())
@@ -126,7 +128,7 @@ def streaming_round_trip():
     print(f"sum of chunk sums vs expected sum: {sum(chunk_sums):.6g} vs {expected.sum():.6g}")
 
 
-def streaming_timing():
+def streaming_timing() -> None:
     print("--- streaming throughput")
     free_bytes, _ = cp.cuda.runtime.memGetInfo()
     geometry = PlateGeometry.rectangular(40, 30, 2, spatial_resolution=0.1, layer_height=0.1,
@@ -137,14 +139,14 @@ def streaming_timing():
     print(f"grid {geometry.length} x {geometry.width}, {geometry.n_layers} layers, "
           f"{layer_bytes / 1e6:.1f} MB per layer, {free_bytes / 1e9:.2f} GB free on the device")
 
-    def work(chunk, layers):
+    def work(chunk: cp.ndarray, layers: slice) -> None:
         # A few passes over the data so compute is comparable to the copies.
         for _ in range(4):
             chunk *= 1.0001
             chunk += 1e-3
         return None
 
-    results = []
+    results: list[tuple[int, int, float, float]] = []  # (n_buffers, chunk_layers, seconds, GB/s)
     for n_buffers in (1, 2):
         for chunk_layers in (1, 2, 5, 10):
             colony = ColonyState(geometry, strains, bracket_count, chunk_layers=chunk_layers,
