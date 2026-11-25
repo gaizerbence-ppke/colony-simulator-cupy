@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "colonysimulator"
+version = "0.2.0"
+description = "State-aggregated GPU simulator for yeast colony growth on agar plates"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "scipy",
+    "Pillow",
+    "matplotlib",
+]
+
+# CuPy is required at runtime, but the wheel depends on the CUDA toolkit present on the
+# machine, so it is an extra: pick the one matching your driver (Colab ships cupy-cuda12x).
+[project.optional-dependencies]
+cuda12x = ["cupy-cuda12x>=12"]
+cuda13x = ["cupy-cuda13x>=13"]
+
+[tool.setuptools.packages.find]
+include = ["colonysimulator*"]
+
+[tool.setuptools.package-data]
+colonysimulator = ["kernels/*.cu"]

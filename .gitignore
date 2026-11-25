@@ -209,5 +209,6 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
-# Figures written by the check scripts in tests/
-/test_outputs/
+# Figures written by the scripts in validation/ and scenarios/
+/validation_outputs/
+/scenarios/*/output/

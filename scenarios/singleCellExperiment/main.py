@@ -1,0 +1,145 @@
+"""Single cell placed at the centre of a small square plate, grown and recorded as height maps.
+
+Run from anywhere:
+    python scenarios/singleCellExperiment/main.py
+    %run scenarios/singleCellExperiment/main.py      (Colab, from the repository root)
+
+Outputs go to scenarios/singleCellExperiment/output/.
+
+Status: only the data layout exists so far (step 1). The time loop below runs and records
+height maps, but nothing changes between frames until the nutrient solver (step 2), the
+growth kernel (step 3) and spreading (step 4) are plugged in where marked.
+"""
+import sys
+from pathlib import Path
+
+try:
+    import colonysimulator  # noqa: F401  (installed with `pip install -e .`)
+except ImportError:
+    # Fallback for a plain clone without installation, e.g. a fresh Colab runtime.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+import matplotlib
+import numpy as np
+from PIL import Image
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+
+from colonysimulator import CellStrain, ColonyState, PlateGeometry
+
+OUTPUT_DIR = Path(__file__).resolve().parent / "output"
+
+# ---- plate -------------------------------------------------------------------------------
+MM_LENGTH = 8.0              # mm
+MM_WIDTH = 8.0               # mm
+MM_DEPTH = 4.0               # mm of agar
+SPATIAL_RESOLUTION = 0.1     # mm, horizontal voxel size and agar voxel height
+LAYER_HEIGHT = 0.005         # mm, one colony layer (about one cell)
+MAX_COLONY_HEIGHT = 0.5      # mm, sets the number of colony layers allocated
+
+# ---- nutrient (consumed by the solver from step 2 on) ------------------------------------
+GLUCOSE_CONCENTRATION = 0.1 / 1000   # g/ml in the agar at t = 0
+AGAR_DIFFUSION = 2.4                 # mm^2/h, glucose in agar
+ECM_DIFFUSION = 2.4                  # mm^2/h, glucose in the colony; placeholder until measured
+
+# ---- strain ------------------------------------------------------------------------------
+GLUCOSE_MOLECULAR_WEIGHT = 180e-3    # g/mmol
+CELL_DRY_WEIGHT = 1e-12              # g
+MAX_UPTAKE = 15                      # mmol/gDW/h
+MAINTENANCE_UPTAKE = 0.3             # mmol/gDW/h
+KM_GLUCOSE = 1.0                     # mM, high-affinity hexose transport
+
+strain = CellStrain(
+    name="test",
+    division_time=1.75,                                                         # h
+    m_max=MAX_UPTAKE * CELL_DRY_WEIGHT * GLUCOSE_MOLECULAR_WEIGHT,              # g/cell/h
+    km=KM_GLUCOSE * GLUCOSE_MOLECULAR_WEIGHT * 1e-3,                            # g/ml
+    nutrient_consumption=MAINTENANCE_UPTAKE * CELL_DRY_WEIGHT * GLUCOSE_MOLECULAR_WEIGHT,
+    volume=42e-9,                                                               # mm^3
+)
+
+# ---- run ---------------------------------------------------------------------------------
+BRACKET_COUNT = 50
+TIME_RESOLUTION = 0.1        # h
+N_STEPS = 2000
+RECORD_EVERY = 100           # steps between recorded height maps
+
+
+def save_gif(frames, path, duration_ms=200):
+    """Grey-scale animation, normalised to the tallest point over all frames."""
+    peak = max(float(frame.max()) for frame in frames)
+    scale = 255.0 / peak if peak > 0 else 0.0
+    images = [Image.fromarray((frame.T[::-1] * scale).astype(np.uint8)) for frame in frames]
+    images[0].save(path, save_all=True, append_images=images[1:], duration=duration_ms, loop=0)
+
+
+def save_height_map(height, geometry, path, title):
+    extent = (0, geometry.length * geometry.spatial_resolution,
+              0, geometry.width * geometry.spatial_resolution)
+    figure, axis = plt.subplots(figsize=(6, 5))
+    image = axis.imshow(height.T * 1e3, origin="lower", extent=extent)
+    figure.colorbar(image, ax=axis, label="colony height (um)")
+    axis.set_xlabel("x (mm)")
+    axis.set_ylabel("y (mm)")
+    axis.set_title(title)
+    figure.savefig(path, dpi=120, bbox_inches="tight")
+    plt.close(figure)
+
+
+def save_profiles(height, geometry, path):
+    """Height along the axis and along the 45 degree diagonal, from the centre outward."""
+    ci, cj = geometry.centre_voxel()
+    reach = min(geometry.length - ci, geometry.width - cj)
+    axial = height[ci:, cj]
+    diagonal = np.array([height[ci + k, cj + k] for k in range(reach)])
+    step = geometry.spatial_resolution
+
+    figure, axis = plt.subplots(figsize=(10, 5))
+    axis.plot(np.arange(len(axial)) * step, axial * 1e3, marker="o", label="axial")
+    axis.plot(np.arange(len(diagonal)) * step * np.sqrt(2), diagonal * 1e3, marker="s",
+              label="45 degree diagonal")
+    axis.set_xlabel("distance from centre (mm)")
+    axis.set_ylabel("colony height (um)")
+    axis.grid(True)
+    axis.legend()
+    figure.savefig(path, dpi=120, bbox_inches="tight")
+    plt.close(figure)
+
+
+def main():
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    geometry = PlateGeometry.rectangular(MM_LENGTH, MM_WIDTH, MM_DEPTH, SPATIAL_RESOLUTION,
+                                         LAYER_HEIGHT, MAX_COLONY_HEIGHT)
+    colony = ColonyState(geometry, [strain], BRACKET_COUNT)
+    print(geometry.describe())
+    print(colony.describe())
+    print(f"capacity per voxel: {strain.capacity_per_voxel(geometry):.0f} cells, "
+          f"maintenance food ratio: {strain.maintenance_ratio:.3f}")
+
+    colony.seed_single_cell_at_centre(strain.name)
+
+    frames = []
+    for step in range(N_STEPS):
+        # Per-step physics, in this order once implemented:
+        #   step 2: nutrient column solve with Michaelis-Menten sinks + horizontal spread
+        #   step 3: growth kernel over the streamed bracket distribution
+        #   step 4: tension-driven spreading of living and dead cells
+        if step % RECORD_EVERY == RECORD_EVERY - 1:
+            living, dead = colony.cell_counts()
+            hours = (step + 1) * TIME_RESOLUTION
+            print(f"step {step + 1:5d} ({hours:6.1f} h): living {living.sum():.4g}, "
+                  f"dead {dead.sum():.4g}, active layers {colony.active_layers}")
+            frames.append(colony.height_map().get())
+
+    final_height = colony.height_map().get()
+    save_gif(frames, OUTPUT_DIR / "colony_growth.gif")
+    save_height_map(final_height, geometry, OUTPUT_DIR / "colony_result.png",
+                    f"height map after {N_STEPS * TIME_RESOLUTION:.0f} h")
+    save_profiles(final_height, geometry, OUTPUT_DIR / "height_profiles.png")
+    print(f"outputs written to {OUTPUT_DIR}")
+
+
+if __name__ == "__main__":
+    main()
