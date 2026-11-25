@@ -14,11 +14,26 @@ import math
 
 import cupy as cp
 import numpy as np
+from numpy.typing import ArrayLike
 
 
 class PlateGeometry:
-    def __init__(self, mm_length, mm_width, mm_depth, spatial_resolution, layer_height,
-                 max_colony_height, mask=None):
+    # Attributes set in __init__ (listed here so their types are visible in one place).
+    mm_length: float           # mm
+    mm_width: float            # mm
+    mm_depth: float            # mm of agar
+    spatial_resolution: float  # mm, horizontal voxel size and agar voxel height
+    layer_height: float        # mm, height of one colony layer
+    max_colony_height: float   # mm
+    length: int                # voxels along x
+    width: int                 # voxels along y
+    agar_depth: int            # agar voxels
+    n_layers: int              # colony layers
+    mask: cp.ndarray           # (length, width) bool, True inside the plate
+
+    def __init__(self, mm_length: float, mm_width: float, mm_depth: float,
+                 spatial_resolution: float, layer_height: float, max_colony_height: float,
+                 mask: ArrayLike | None = None) -> None:
         self.mm_length = float(mm_length)
         self.mm_width = float(mm_width)
         self.mm_depth = float(mm_depth)
@@ -36,22 +51,24 @@ class PlateGeometry:
 
         if mask is None:
             mask = np.ones((self.length, self.width), dtype=bool)
-        mask = cp.asarray(mask, dtype=bool)
-        if mask.shape != (self.length, self.width):
-            raise ValueError(f"mask shape {mask.shape} does not match grid ({self.length}, {self.width})")
-        self.mask = mask
+        device_mask = cp.asarray(mask, dtype=bool)
+        if device_mask.shape != (self.length, self.width):
+            raise ValueError(f"mask shape {device_mask.shape} does not match grid ({self.length}, {self.width})")
+        self.mask = device_mask
 
     # ---- factories -------------------------------------------------------------------
 
     @classmethod
-    def rectangular(cls, mm_length, mm_width, mm_depth, spatial_resolution, layer_height,
-                    max_colony_height):
+    def rectangular(cls, mm_length: float, mm_width: float, mm_depth: float,
+                    spatial_resolution: float, layer_height: float,
+                    max_colony_height: float) -> PlateGeometry:
         """Rectangular plate, e.g. a single-well omnitray (about 128 x 86 mm)."""
         return cls(mm_length, mm_width, mm_depth, spatial_resolution, layer_height,
                    max_colony_height, mask=None)
 
     @classmethod
-    def circular(cls, diameter, mm_depth, spatial_resolution, layer_height, max_colony_height):
+    def circular(cls, diameter: float, mm_depth: float, spatial_resolution: float,
+                 layer_height: float, max_colony_height: float) -> PlateGeometry:
         """Circular Petri dish of the given diameter, embedded in a square grid."""
         length = int(diameter // spatial_resolution)
         centre = (length - 1) / 2.0
@@ -64,26 +81,26 @@ class PlateGeometry:
     # ---- derived quantities ----------------------------------------------------------
 
     @property
-    def voxel_area(self):
+    def voxel_area(self) -> float:
         """Horizontal voxel footprint in mm^2."""
         return self.spatial_resolution ** 2
 
     @property
-    def agar_voxel_volume(self):
+    def agar_voxel_volume(self) -> float:
         """Volume of one agar voxel in mm^3."""
         return self.spatial_resolution ** 3
 
     @property
-    def layer_voxel_volume(self):
+    def layer_voxel_volume(self) -> float:
         """Volume of one colony-layer voxel in mm^3."""
         return self.voxel_area * self.layer_height
 
     @property
-    def plate_columns(self):
+    def plate_columns(self) -> int:
         """Number of (x, y) columns inside the plate mask."""
         return int(self.mask.sum())
 
-    def to_voxel(self, x_mm, y_mm):
+    def to_voxel(self, x_mm: float, y_mm: float) -> tuple[int, int]:
         """Map a position in mm (measured from the plate corner) to grid indices."""
         i = int(x_mm // self.spatial_resolution)
         j = int(y_mm // self.spatial_resolution)
@@ -93,10 +110,10 @@ class PlateGeometry:
             raise ValueError(f"({x_mm}, {y_mm}) mm lies outside the plate mask")
         return i, j
 
-    def centre_voxel(self):
+    def centre_voxel(self) -> tuple[int, int]:
         return self.length // 2, self.width // 2
 
-    def describe(self):
+    def describe(self) -> str:
         return (f"{self.mm_length} x {self.mm_width} mm plate, {self.length} x {self.width} columns "
                 f"({self.plate_columns} inside the mask), {self.agar_depth} agar voxels of "
                 f"{self.spatial_resolution} mm, up to {self.n_layers} colony layers of {self.layer_height} mm")

@@ -16,17 +16,40 @@ consecutive layers across all strains is one contiguous block of host memory.
 """
 from __future__ import annotations
 
+from collections.abc import Iterable
+from typing import Any
+
 import cupy as cp
 import numpy as np
 
 from .plate import PlateGeometry
 from .strain import CellStrain
-from .streaming import LayerStreamer, chunk_layers_for_budget, pinned_zeros
+from .streaming import ChunkFunction, LayerStreamer, chunk_layers_for_budget, pinned_zeros
+
+# A strain can be referred to by its position in `ColonyState.strains`, by its name, or by
+# the CellStrain object itself.
+StrainRef = int | str | CellStrain
 
 
 class ColonyState:
-    def __init__(self, geometry: PlateGeometry, strains, bracket_count: int, pinned=True,
-                 device_memory_budget=None, chunk_layers=None, n_buffers=2):
+    geometry: PlateGeometry
+    strains: list[CellStrain]
+    bracket_count: int
+    n_strains: int
+    n_layers: int
+    length: int
+    width: int
+    capacity: cp.ndarray        # (n_strains,) float32, cells per voxel
+    living: np.ndarray          # host, see the module docstring for the shape
+    living_total: cp.ndarray    # device
+    dead: cp.ndarray            # device
+    streamer: LayerStreamer
+    active_layers: int
+
+    def __init__(self, geometry: PlateGeometry, strains: CellStrain | Iterable[CellStrain],
+                 bracket_count: int, pinned: bool = True,
+                 device_memory_budget: int | None = None, chunk_layers: int | None = None,
+                 n_buffers: int = 2) -> None:
         if isinstance(strains, CellStrain):
             strains = [strains]
         strains = list(strains)
@@ -67,7 +90,7 @@ class ColonyState:
 
     # ---- bookkeeping -------------------------------------------------------------------
 
-    def strain_index(self, strain):
+    def strain_index(self, strain: StrainRef) -> int:
         if isinstance(strain, (int, np.integer)):
             return int(strain)
         if isinstance(strain, CellStrain):
@@ -78,14 +101,14 @@ class ColonyState:
         raise KeyError(f"unknown strain {strain!r}")
 
     @property
-    def host_bytes(self):
+    def host_bytes(self) -> int:
         return self.living.nbytes
 
     @property
-    def device_bytes(self):
+    def device_bytes(self) -> int:
         return self.living_total.nbytes + self.dead.nbytes + self.streamer.device_bytes
 
-    def describe(self):
+    def describe(self) -> str:
         return (f"{self.n_strains} strain(s), {self.bracket_count} brackets, "
                 f"{self.n_layers} layers of {self.length} x {self.width}: "
                 f"{self.host_bytes / 1e9:.2f} GB on the host"
@@ -96,12 +119,14 @@ class ColonyState:
 
     # ---- initial conditions ------------------------------------------------------------
 
-    def seed_cells(self, strain, x_mm, y_mm, cells, layer=0, bracket=0):
+    def seed_cells(self, strain: StrainRef, x_mm: float, y_mm: float, cells: float,
+                   layer: int = 0, bracket: int = 0) -> None:
         """Put `cells` cells of `strain` into the voxel at (x_mm, y_mm) in the given layer."""
         i, j = self.geometry.to_voxel(x_mm, y_mm)
         self.seed_voxel(strain, i, j, cells, layer=layer, bracket=bracket)
 
-    def seed_voxel(self, strain, i, j, cells, layer=0, bracket=0):
+    def seed_voxel(self, strain: StrainRef, i: int, j: int, cells: float,
+                   layer: int = 0, bracket: int = 0) -> None:
         s = self.strain_index(strain)
         if not (0 <= layer < self.n_layers):
             raise ValueError(f"layer {layer} outside 0..{self.n_layers - 1}")
@@ -111,13 +136,14 @@ class ColonyState:
         self.living_total[layer, s, i, j] += np.float32(cells)
         self.active_layers = max(self.active_layers, layer + 1)
 
-    def seed_single_cell_at_centre(self, strain=0):
+    def seed_single_cell_at_centre(self, strain: StrainRef = 0) -> None:
         i, j = self.geometry.centre_voxel()
         self.seed_voxel(strain, i, j, 1.0)
 
     # ---- streaming over the bracket-resolved distribution -----------------------------
 
-    def map_layers(self, fn, write_back=True, all_layers=False):
+    def map_layers(self, fn: ChunkFunction, write_back: bool = True,
+                   all_layers: bool = False) -> list[Any]:
         """Apply `fn(device_chunk, layer_slice)` to the active layers of `living`.
 
         `device_chunk` has shape (chunk, n_strains, bracket_count, length, width).
@@ -125,15 +151,15 @@ class ColonyState:
         n_layers = None if all_layers else self.active_layers
         return self.streamer.process(fn, n_layers=n_layers, write_back=write_back)
 
-    def refresh_totals(self, all_layers=False):
+    def refresh_totals(self, all_layers: bool = False) -> None:
         """Recompute `living_total` from the host-side distribution."""
-        def reduce_chunk(chunk, layers):
+        def reduce_chunk(chunk: cp.ndarray, layers: slice) -> None:
             self.living_total[layers] = chunk.sum(axis=2)
         self.map_layers(reduce_chunk, write_back=False, all_layers=all_layers)
         if all_layers:
             self.update_active_layers()
 
-    def update_active_layers(self):
+    def update_active_layers(self) -> int:
         """Recount the occupied layers from the GPU-resident totals."""
         occupied = ((self.living_total + self.dead).sum(axis=(1, 2, 3)) > 0)
         indices = cp.flatnonzero(occupied)
@@ -142,17 +168,17 @@ class ColonyState:
 
     # ---- observables --------------------------------------------------------------------
 
-    def occupancy(self):
+    def occupancy(self) -> cp.ndarray:
         """Fraction of each voxel's capacity in use, shape (n_layers, length, width)."""
         per_strain = (self.living_total + self.dead) / self.capacity[None, :, None, None]
         return per_strain.sum(axis=1)
 
-    def height_map(self):
+    def height_map(self) -> cp.ndarray:
         """Top view of the colony height in mm, shape (length, width)."""
         filled = cp.clip(self.occupancy(), 0.0, 1.0)
         return filled.sum(axis=0) * self.geometry.layer_height
 
-    def cell_counts(self):
+    def cell_counts(self) -> tuple[np.ndarray, np.ndarray]:
         """Living and dead cell totals per strain as two host arrays of length n_strains."""
         living = self.living_total.sum(axis=(0, 2, 3)).get()
         dead = self.dead.sum(axis=(0, 2, 3)).get()

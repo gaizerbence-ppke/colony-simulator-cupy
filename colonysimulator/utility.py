@@ -1,6 +1,8 @@
+from __future__ import annotations
+
 import cupy as cp
 
-def initialize_binomial_distribution_matrix(N):
+def initialize_binomial_distribution_matrix(N: int) -> cp.ndarray:
     binomialDistributionMatrix = cp.zeros((N, N), dtype=cp.float32)
     binomialDistributionMatrix[0, 0] = 1.0
     for n in range(1, N):

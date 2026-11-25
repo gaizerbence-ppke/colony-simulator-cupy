@@ -7,11 +7,20 @@ overlap with the computation on chunk i.
 """
 from __future__ import annotations
 
+from collections.abc import Callable, Iterator
+from typing import Any
+
 import cupy as cp
 import numpy as np
+from numpy.typing import DTypeLike
+
+# The function `LayerStreamer.process` calls on every chunk: it receives the device chunk and
+# the slice of layers it covers, and may return anything (collected into a list).
+ChunkFunction = Callable[[cp.ndarray, slice], Any]
 
 
-def pinned_zeros(shape, dtype=np.float32, pinned=True):
+def pinned_zeros(shape: tuple[int, ...], dtype: DTypeLike = np.float32,
+                 pinned: bool = True) -> np.ndarray:
     """Allocate a zero-filled host array, in page-locked memory when `pinned` is True.
 
     Page-locked memory is what makes host<->device copies asynchronous. If the allocation
@@ -32,9 +41,9 @@ def pinned_zeros(shape, dtype=np.float32, pinned=True):
     return np.zeros(shape, dtype=dtype)
 
 
-def is_pinned(array):
+def is_pinned(array: np.ndarray) -> bool:
     """True when `array` is backed by memory obtained from cupy.cuda.alloc_pinned_memory."""
-    base = array
+    base: object = array
     while isinstance(base, np.ndarray):
         base = base.base
     if isinstance(base, memoryview):
@@ -53,7 +62,14 @@ class LayerStreamer:
     Reductions `fn` writes into GPU-resident arrays are complete once `process` returns.
     """
 
-    def __init__(self, host_array, chunk_layers, n_buffers=2):
+    host: np.ndarray                # the streamed host array, layer axis first
+    n_layers: int
+    chunk_layers: int               # layers per chunk
+    n_buffers: int
+    buffers: list[cp.ndarray]       # one preallocated device buffer per stream
+    streams: list[cp.cuda.Stream]
+
+    def __init__(self, host_array: np.ndarray, chunk_layers: int, n_buffers: int = 2) -> None:
         if not host_array.flags.c_contiguous:
             raise ValueError("host array must be C-contiguous so layer chunks are contiguous")
         if n_buffers < 1:
@@ -69,25 +85,26 @@ class LayerStreamer:
         self.streams = [cp.cuda.Stream() for _ in range(self.n_buffers)]
 
     @property
-    def device_bytes(self):
+    def device_bytes(self) -> int:
         return sum(buffer.nbytes for buffer in self.buffers)
 
     @property
-    def pinned(self):
+    def pinned(self) -> bool:
         return is_pinned(self.host)
 
-    def chunks(self, n_layers=None):
+    def chunks(self, n_layers: int | None = None) -> Iterator[tuple[int, int]]:
         n_layers = self.n_layers if n_layers is None else min(int(n_layers), self.n_layers)
         for start in range(0, n_layers, self.chunk_layers):
             yield start, min(start + self.chunk_layers, n_layers)
 
-    def process(self, fn, n_layers=None, write_back=True):
+    def process(self, fn: ChunkFunction, n_layers: int | None = None,
+                write_back: bool = True) -> list[Any]:
         """Run `fn` over the first `n_layers` layers (all by default) chunk by chunk.
 
         Returns the list of values `fn` returned, one per chunk. All streams are
         synchronised before returning, so host data and GPU-side results are final.
         """
-        results = []
+        results: list[Any] = []
         for i, (start, stop) in enumerate(self.chunks(n_layers)):
             buffer_index = i % self.n_buffers
             stream = self.streams[buffer_index]
@@ -105,7 +122,8 @@ class LayerStreamer:
         return results
 
 
-def chunk_layers_for_budget(layer_shape, dtype, budget_bytes, n_buffers=2, n_layers=None):
+def chunk_layers_for_budget(layer_shape: tuple[int, ...], dtype: DTypeLike, budget_bytes: int,
+                            n_buffers: int = 2, n_layers: int | None = None) -> int:
     """Largest number of layers per chunk whose `n_buffers` device buffers fit the budget."""
     bytes_per_layer = int(np.prod(layer_shape)) * np.dtype(dtype).itemsize
     chunk = max(1, int(budget_bytes) // (bytes_per_layer * n_buffers))

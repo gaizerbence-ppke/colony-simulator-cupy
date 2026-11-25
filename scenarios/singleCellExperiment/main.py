@@ -10,6 +10,8 @@ Status: only the data layout exists so far (step 1). The time loop below runs an
 height maps, but nothing changes between frames until the nutrient solver (step 2), the
 growth kernel (step 3) and spreading (step 4) are plugged in where marked.
 """
+from __future__ import annotations
+
 import sys
 from pathlib import Path
 
@@ -66,7 +68,7 @@ N_STEPS = 2000
 RECORD_EVERY = 100           # steps between recorded height maps
 
 
-def save_gif(frames, path, duration_ms=200):
+def save_gif(frames: list[np.ndarray], path: Path, duration_ms: int = 200) -> None:
     """Grey-scale animation, normalised to the tallest point over all frames."""
     peak = max(float(frame.max()) for frame in frames)
     scale = 255.0 / peak if peak > 0 else 0.0
@@ -74,7 +76,7 @@ def save_gif(frames, path, duration_ms=200):
     images[0].save(path, save_all=True, append_images=images[1:], duration=duration_ms, loop=0)
 
 
-def save_height_map(height, geometry, path, title):
+def save_height_map(height: np.ndarray, geometry: PlateGeometry, path: Path, title: str) -> None:
     extent = (0, geometry.length * geometry.spatial_resolution,
               0, geometry.width * geometry.spatial_resolution)
     figure, axis = plt.subplots(figsize=(6, 5))
@@ -87,7 +89,7 @@ def save_height_map(height, geometry, path, title):
     plt.close(figure)
 
 
-def save_profiles(height, geometry, path):
+def save_profiles(height: np.ndarray, geometry: PlateGeometry, path: Path) -> None:
     """Height along the axis and along the 45 degree diagonal, from the centre outward."""
     ci, cj = geometry.centre_voxel()
     reach = min(geometry.length - ci, geometry.width - cj)
@@ -107,7 +109,7 @@ def save_profiles(height, geometry, path):
     plt.close(figure)
 
 
-def main():
+def main() -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     geometry = PlateGeometry.rectangular(MM_LENGTH, MM_WIDTH, MM_DEPTH, SPATIAL_RESOLUTION,
@@ -120,7 +122,7 @@ def main():
 
     colony.seed_single_cell_at_centre(strain.name)
 
-    frames = []
+    frames: list[np.ndarray] = []
     for step in range(N_STEPS):
         # Per-step physics, in this order once implemented:
         #   step 2: nutrient column solve with Michaelis-Menten sinks + horizontal spread
