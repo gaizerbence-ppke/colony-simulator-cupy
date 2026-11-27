@@ -68,8 +68,6 @@ extern "C"
             if (r + 1 < rows)
             {
                 int above = r + 1;
-                // Agar rows are always medium. || stops before the read when the row is agar,
-                // so `medium` is never indexed with a negative row.
                 aboveIsMedium = above < agarDepth || medium[(above - agarDepth) * area + column];
                 aboveDiffusion = above < agarDepth ? agarDiffusion : ecmDiffusion;
                 aboveDz = above < agarDepth ? agarDz : colonyDz;
