@@ -81,6 +81,8 @@ extern "C"
                 sink = sinkRate[(r - agarDepth) * area + column];
 
             // Row r of the system:  lower * C_{r-1} + diag * C_r + upper * C_{r+1} = rhs
+            // TODO(Bence): verify the voxel balance in the header (per unit area, divided by
+            // dz/dt) and that every flux term carries ratio = dt / dz.
             double ratio = dt / dz;
             double lower = -theta * ratio * gBelow;
             double upper = -theta * ratio * gAbove;
