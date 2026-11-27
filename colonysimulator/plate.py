@@ -4,8 +4,9 @@ Units throughout the package: millimetres, hours, grams.
 
 The horizontal grid is `length x width` voxels of `spatial_resolution` mm. Below the surface
 there are `agar_depth` agar voxels, each `spatial_resolution` mm tall. Above the surface
-there are up to `n_layers` colony layers, each `layer_height` mm tall (typically thinner
-than an agar voxel). The mask marks which (x, y) columns belong to the plate; everything
+there are colony layers, each `layer_height` mm tall (typically thinner than an agar
+voxel). How many colony layers are allocated is decided by `ColonyState`, which adds layers
+as the colony rises; `max_colony_height` is an optional upper limit (None: no limit). The mask marks which (x, y) columns belong to the plate; everything
 outside the mask is wall: no agar, no cells, zero flux.
 """
 from __future__ import annotations
@@ -33,30 +34,36 @@ class PlateGeometry:
     mm_depth: float            # mm of agar
     spatial_resolution: float  # mm, horizontal voxel size and agar voxel height
     layer_height: float        # mm, height of one colony layer
-    max_colony_height: float   # mm
+    max_colony_height: float | None  # mm, None for no limit
     length: int                # voxels along x
     width: int                 # voxels along y
     agar_depth: int            # agar voxels
-    n_layers: int              # colony layers
+    max_layers: int | None     # colony layers allowed by max_colony_height, None for no limit
     mask: cp.ndarray           # (length, width) bool, True inside the plate
 
     def __init__(self, mm_length: float, mm_width: float, mm_depth: float,
-                 spatial_resolution: float, layer_height: float, max_colony_height: float,
+                 spatial_resolution: float, layer_height: float,
+                 max_colony_height: float | None = None,
                  mask: ArrayLike | None = None) -> None:
         self.mm_length = float(mm_length)
         self.mm_width = float(mm_width)
         self.mm_depth = float(mm_depth)
         self.spatial_resolution = float(spatial_resolution)
         self.layer_height = float(layer_height)
-        self.max_colony_height = float(max_colony_height)
+        self.max_colony_height = None if max_colony_height is None else float(max_colony_height)
 
         self.length = voxel_count(self.mm_length, self.spatial_resolution)
         self.width = voxel_count(self.mm_width, self.spatial_resolution)
         self.agar_depth = voxel_count(self.mm_depth, self.spatial_resolution)
-        self.n_layers = int(math.ceil(self.max_colony_height / self.layer_height))
+        self.max_layers = (None if self.max_colony_height is None
+                           else int(math.ceil(self.max_colony_height / self.layer_height - 1e-6)))
 
-        if self.length < 1 or self.width < 1 or self.agar_depth < 1 or self.n_layers < 1:
+        if self.length < 1 or self.width < 1 or self.agar_depth < 1:
             raise ValueError("Plate dimensions must span at least one voxel in every direction")
+        if self.layer_height <= 0:
+            raise ValueError("layer_height must be positive")
+        if self.max_layers is not None and self.max_layers < 1:
+            raise ValueError("max_colony_height must allow at least one colony layer")
 
         if mask is None:
             mask = np.ones((self.length, self.width), dtype=bool)
@@ -70,14 +77,14 @@ class PlateGeometry:
     @classmethod
     def rectangular(cls, mm_length: float, mm_width: float, mm_depth: float,
                     spatial_resolution: float, layer_height: float,
-                    max_colony_height: float) -> PlateGeometry:
+                    max_colony_height: float | None = None) -> PlateGeometry:
         """Rectangular plate, e.g. a single-well omnitray (about 128 x 86 mm)."""
         return cls(mm_length, mm_width, mm_depth, spatial_resolution, layer_height,
                    max_colony_height, mask=None)
 
     @classmethod
     def circular(cls, diameter: float, mm_depth: float, spatial_resolution: float,
-                 layer_height: float, max_colony_height: float) -> PlateGeometry:
+                 layer_height: float, max_colony_height: float | None = None) -> PlateGeometry:
         """Circular Petri dish of the given diameter, embedded in a square grid."""
         length = voxel_count(diameter, spatial_resolution)
         centre = (length - 1) / 2.0
@@ -125,4 +132,5 @@ class PlateGeometry:
     def describe(self) -> str:
         return (f"{self.mm_length} x {self.mm_width} mm plate, {self.length} x {self.width} columns "
                 f"({self.plate_columns} inside the mask), {self.agar_depth} agar voxels of "
-                f"{self.spatial_resolution} mm, up to {self.n_layers} colony layers of {self.layer_height} mm")
+                f"{self.spatial_resolution} mm, colony layers of {self.layer_height} mm"
+                + ("" if self.max_layers is None else f", at most {self.max_layers}"))

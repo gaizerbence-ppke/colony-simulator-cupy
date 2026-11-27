@@ -28,7 +28,7 @@ pip install "colonysimulator[cuda13x] @ git+https://github.com/<owner>/colony-si
 |---|---|
 | `colonysimulator/plate.py` | `PlateGeometry`: grid dimensions, agar depth, colony layers and the 2D plate mask (rectangular omnitray or circular dish) |
 | `colonysimulator/strain.py` | `CellStrain`: division time, Michaelis-Menten uptake (`m_max`, `km`), maintenance consumption, cell volume |
-| `colonysimulator/colony.py` | `ColonyState`: host-resident bracket-resolved distribution, GPU-resident per-layer totals and dead cells, height map |
+| `colonysimulator/colony.py` | `ColonyState`: host-resident bracket-resolved distribution, GPU-resident per-layer totals and dead cells, height map; adds layers as the colony rises (`max_colony_height` is an optional limit) |
 | `colonysimulator/nutrient.py` | `NutrientField`: glucose in agar and colony; per-column implicit vertical diffusion with Michaelis-Menten uptake (GPU kernel), per-layer mass-conserving Gaussian horizontal spread |
 | `colonysimulator/streaming.py` | `LayerStreamer`: double-buffered host-to-device streaming of layer chunks on CUDA streams |
 | `colonysimulator/kernels/` | CUDA kernels loaded with `cupy.RawKernel` |

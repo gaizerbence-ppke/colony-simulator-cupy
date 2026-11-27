@@ -39,7 +39,7 @@ MM_WIDTH = 8.0               # mm
 MM_DEPTH = 4.0               # mm of agar
 SPATIAL_RESOLUTION = 0.1     # mm, horizontal voxel size and agar voxel height
 LAYER_HEIGHT = 0.005         # mm, one colony layer (about one cell)
-MAX_COLONY_HEIGHT = 0.5      # mm, sets the number of colony layers allocated
+MAX_COLONY_HEIGHT = None     # mm, optional upper limit; layers are added as the colony rises
 
 # ---- nutrient ----------------------------------------------------------------------------
 GLUCOSE_CONCENTRATION = 0.1 / 1000   # g/ml in the agar at t = 0

@@ -13,6 +13,15 @@ Data layout
 
 Layer 0 sits directly on the agar surface. The layer axis comes first so that a chunk of
 consecutive layers across all strains is one contiguous block of host memory.
+
+Number of layers
+----------------
+`n_layers` is the number of layers currently allocated, not a fixed maximum. It starts at
+`initial_layers` and grows whenever the occupied layers (`active_layers`) come within
+`headroom` layers of the top: all three arrays are reallocated with more layers and the
+existing layers are copied over. Each growth adds at least `growth_layers` layers and at
+least a quarter of the current count, so a tall colony is reallocated only a few dozen
+times per run. `geometry.max_layers` (from `max_colony_height`) caps the growth when set.
 """
 from __future__ import annotations
 
@@ -45,11 +54,14 @@ class ColonyState:
     dead: cp.ndarray            # device
     streamer: LayerStreamer
     active_layers: int
+    headroom: int               # empty layers kept allocated above the occupied ones
+    growth_layers: int          # minimum number of layers added per growth
 
     def __init__(self, geometry: PlateGeometry, strains: CellStrain | Iterable[CellStrain],
                  bracket_count: int, pinned: bool = True,
                  device_memory_budget: int | None = None, chunk_layers: int | None = None,
-                 n_buffers: int = 2) -> None:
+                 n_buffers: int = 2, initial_layers: int = 16, headroom: int = 4,
+                 growth_layers: int = 16) -> None:
         if isinstance(strains, CellStrain):
             strains = [strains]
         strains = list(strains)
@@ -59,30 +71,42 @@ class ColonyState:
             raise ValueError("strain names must be unique")
         if bracket_count < 1:
             raise ValueError("bracket_count must be at least 1")
+        if initial_layers < 1 or headroom < 0 or growth_layers < 1:
+            raise ValueError("initial_layers and growth_layers must be at least 1, headroom non-negative")
 
         self.geometry = geometry
         self.strains = strains
         self.bracket_count = int(bracket_count)
         self.n_strains = len(strains)
-        self.n_layers = geometry.n_layers
         self.length = geometry.length
         self.width = geometry.width
 
         self.capacity = cp.asarray([strain.capacity_per_voxel(geometry) for strain in strains],
                                    dtype=cp.float32)
 
-        layer_shape = (self.n_strains, self.bracket_count, self.length, self.width)
-        self.living = pinned_zeros((self.n_layers,) + layer_shape, np.float32, pinned=pinned)
-        self.living_total = cp.zeros((self.n_layers, self.n_strains, self.length, self.width), dtype=cp.float32)
-        self.dead = cp.zeros((self.n_layers, self.n_strains, self.length, self.width), dtype=cp.float32)
+        self.headroom = int(headroom)
+        self.growth_layers = int(growth_layers)
+        self._pinned = pinned
+        self._n_buffers = int(n_buffers)
+        self._layer_shape = (self.n_strains, self.bracket_count, self.length, self.width)
 
         if chunk_layers is None:
             if device_memory_budget is None:
                 free_bytes, _ = cp.cuda.runtime.memGetInfo()
                 device_memory_budget = free_bytes // 4
-            chunk_layers = chunk_layers_for_budget(layer_shape, np.float32, device_memory_budget,
-                                                   n_buffers=n_buffers, n_layers=self.n_layers)
-        self.streamer = LayerStreamer(self.living, chunk_layers, n_buffers=n_buffers)
+            chunk_layers = chunk_layers_for_budget(self._layer_shape, np.float32, device_memory_budget,
+                                                   n_buffers=n_buffers)
+        # Layers per streamed chunk; the streamer caps it at the allocated layer count.
+        self._chunk_layers = int(chunk_layers)
+
+        n_layers = int(initial_layers)
+        if geometry.max_layers is not None:
+            n_layers = min(n_layers, geometry.max_layers)
+        self.n_layers = n_layers
+        self.living = pinned_zeros((n_layers,) + self._layer_shape, np.float32, pinned=pinned)
+        self.living_total = cp.zeros((n_layers, self.n_strains, self.length, self.width), dtype=cp.float32)
+        self.dead = cp.zeros((n_layers, self.n_strains, self.length, self.width), dtype=cp.float32)
+        self.streamer = LayerStreamer(self.living, self._chunk_layers, n_buffers=self._n_buffers)
 
         # Number of layers, counted from the agar surface, that hold any cells. Streaming
         # passes only touch these; everything above is empty by construction.
@@ -99,6 +123,63 @@ class ColonyState:
             if candidate.name == strain:
                 return index
         raise KeyError(f"unknown strain {strain!r}")
+
+    # ---- allocated layers ----------------------------------------------------------------
+
+    def bytes_per_layer(self) -> tuple[int, int]:
+        """Host and device bytes one allocated layer takes (cell arrays only)."""
+        host = int(np.prod(self._layer_shape)) * 4
+        device = 2 * self.n_strains * self.length * self.width * 4
+        return host, device
+
+    def ensure_layers(self, needed: int) -> None:
+        """Make sure at least `needed` layers are allocated, growing the arrays if not.
+
+        Raises ValueError when `needed` exceeds `geometry.max_layers`, and MemoryError when
+        the GPU does not have room for the larger arrays.
+        """
+        needed = int(needed)
+        if needed <= self.n_layers:
+            return
+        limit = self.geometry.max_layers
+        if limit is not None and needed > limit:
+            raise ValueError(f"the colony needs {needed} layers but max_colony_height allows {limit}")
+
+        new_layers = max(needed, self.n_layers + max(self.growth_layers, self.n_layers // 4))
+        if limit is not None:
+            new_layers = min(new_layers, limit)
+
+        host_per_layer, device_per_layer = self.bytes_per_layer()
+        # The new device arrays are allocated while the old ones still exist.
+        free_bytes, _ = cp.cuda.runtime.memGetInfo()
+        free_bytes += cp.get_default_memory_pool().free_bytes()
+        device_needed = new_layers * device_per_layer
+        if device_needed > free_bytes:
+            raise MemoryError(f"growing to {new_layers} layers needs another {device_needed / 1e9:.2f} GB "
+                              f"on the GPU, {free_bytes / 1e9:.2f} GB is free")
+
+        old = self.n_layers
+        try:
+            living = pinned_zeros((new_layers,) + self._layer_shape, np.float32, pinned=self._pinned)
+        except MemoryError as error:
+            raise MemoryError(f"growing to {new_layers} layers needs "
+                              f"{new_layers * host_per_layer / 1e9:.2f} GB of host memory") from error
+        living[:old] = self.living
+        living_total = cp.zeros((new_layers,) + self.living_total.shape[1:], dtype=cp.float32)
+        living_total[:old] = self.living_total
+        dead = cp.zeros((new_layers,) + self.dead.shape[1:], dtype=cp.float32)
+        dead[:old] = self.dead
+
+        self.living, self.living_total, self.dead = living, living_total, dead
+        self.n_layers = new_layers
+        self.streamer = LayerStreamer(self.living, self._chunk_layers, n_buffers=self._n_buffers)
+
+    def ensure_headroom(self) -> None:
+        """Keep `headroom` empty layers allocated above the occupied ones."""
+        needed = self.active_layers + self.headroom
+        if self.geometry.max_layers is not None:
+            needed = min(needed, self.geometry.max_layers)
+        self.ensure_layers(needed)
 
     @property
     def host_bytes(self) -> int:
@@ -128,13 +209,15 @@ class ColonyState:
     def seed_voxel(self, strain: StrainRef, i: int, j: int, cells: float,
                    layer: int = 0, bracket: int = 0) -> None:
         s = self.strain_index(strain)
-        if not (0 <= layer < self.n_layers):
-            raise ValueError(f"layer {layer} outside 0..{self.n_layers - 1}")
+        if layer < 0:
+            raise ValueError(f"layer {layer} is negative")
         if not bool(self.geometry.mask[i, j]):
             raise ValueError(f"voxel ({i}, {j}) lies outside the plate mask")
+        self.ensure_layers(layer + 1)
         self.living[layer, s, bracket, i, j] += np.float32(cells)
         self.living_total[layer, s, i, j] += np.float32(cells)
         self.active_layers = max(self.active_layers, layer + 1)
+        self.ensure_headroom()
 
     def seed_single_cell_at_centre(self, strain: StrainRef = 0) -> None:
         i, j = self.geometry.centre_voxel()
@@ -164,6 +247,7 @@ class ColonyState:
         occupied = ((self.living_total + self.dead).sum(axis=(1, 2, 3)) > 0)
         indices = cp.flatnonzero(occupied)
         self.active_layers = int(indices.max()) + 1 if indices.size else 0
+        self.ensure_headroom()
         return self.active_layers
 
     # ---- observables --------------------------------------------------------------------

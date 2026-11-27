@@ -9,7 +9,8 @@ Data layout
     One vertical stack per (x, y) column. Rows 0 .. agar_depth-1 are agar (row 0 is the
     bottom of the dish), the rows above are the colony layers, in the same order as the
     layer axis of `ColonyState` (colony layer 0 sits on the agar). `agar` and `colony` are
-    views of the two parts.
+    views of the two parts. `n_layers` follows the colony: when `ColonyState` allocates more
+    layers, the next `step` adds the same number of empty colony rows here.
 
 Every time step does two things, one after the other (operator splitting):
 
@@ -117,7 +118,7 @@ class NutrientField:
 
     def __init__(self, geometry: PlateGeometry, agar_diffusion: float, ecm_diffusion: float,
                  initial_concentration: float = 0.0, theta: float = 1.0,
-                 ecm_min_cells: float = 0.5) -> None:
+                 ecm_min_cells: float = 0.5, initial_layers: int = 0) -> None:
         if agar_diffusion <= 0 or ecm_diffusion <= 0:
             raise ValueError("diffusion coefficients must be positive")
         if not 0.5 <= theta <= 1.0:
@@ -131,7 +132,7 @@ class NutrientField:
         self.ecm_min_cells = float(ecm_min_cells)
 
         self.agar_depth = geometry.agar_depth
-        self.n_layers = geometry.n_layers
+        self.n_layers = int(initial_layers)
         self.length = geometry.length
         self.width = geometry.width
         self.area = self.length * self.width
@@ -140,11 +141,7 @@ class NutrientField:
         self.concentration = cp.zeros((rows, self.length, self.width), dtype=cp.float32)
         self.set_agar_concentration(initial_concentration)
 
-        # Row volumes in ml, used for mass bookkeeping.
-        self.row_volume_ml = cp.concatenate([
-            cp.full(self.agar_depth, geometry.agar_voxel_volume * ML_PER_MM3, dtype=cp.float64),
-            cp.full(self.n_layers, geometry.layer_voxel_volume * ML_PER_MM3, dtype=cp.float64),
-        ])
+        self.row_volume_ml = self._row_volumes()
 
         # The agar is the same in every step, so its regions are labelled once.
         self._agar_medium = cp.broadcast_to(geometry.mask, (self.agar_depth, self.length, self.width))
@@ -155,6 +152,24 @@ class NutrientField:
         self._sweep_d: cp.ndarray | None = None
 
     # ---- views and set-up ----------------------------------------------------------------
+
+    def _row_volumes(self) -> cp.ndarray:
+        """Volume of one voxel in every row, in ml, used for mass bookkeeping."""
+        return cp.concatenate([
+            cp.full(self.agar_depth, self.geometry.agar_voxel_volume * ML_PER_MM3, dtype=cp.float64),
+            cp.full(self.n_layers, self.geometry.layer_voxel_volume * ML_PER_MM3, dtype=cp.float64),
+        ])
+
+    def ensure_layers(self, n_layers: int) -> None:
+        """Grow the colony part to `n_layers` rows; the new rows hold no nutrient."""
+        n_layers = int(n_layers)
+        if n_layers <= self.n_layers:
+            return
+        grown = cp.zeros((self.agar_depth + n_layers, self.length, self.width), dtype=cp.float32)
+        grown[:self.concentration.shape[0]] = self.concentration
+        self.concentration = grown
+        self.n_layers = n_layers
+        self.row_volume_ml = self._row_volumes()
 
     @property
     def agar(self) -> cp.ndarray:
@@ -186,6 +201,7 @@ class NutrientField:
 
     def saturation(self, colony: ColonyState, n_layers: int | None = None) -> cp.ndarray:
         """Michaelis-Menten saturation C / (Km + C) of every strain, (n_layers, n_strains, length, width)."""
+        self.ensure_layers(colony.n_layers)
         n_layers = colony.active_layers if n_layers is None else int(n_layers)
         c = self.colony[:n_layers, None]
         km = cp.asarray([strain.km for strain in colony.strains], dtype=cp.float32)[None, :, None, None]
@@ -251,6 +267,7 @@ class NutrientField:
         """
         if colony.geometry is not self.geometry:
             raise ValueError("colony and nutrient field must share the same PlateGeometry")
+        self.ensure_layers(colony.n_layers)
         n_active = colony.active_layers
         medium = self.medium_mask(colony, n_active)
 

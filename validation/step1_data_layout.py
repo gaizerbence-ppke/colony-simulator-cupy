@@ -57,9 +57,9 @@ def geometry_report() -> None:
     strains = make_strains()
     for layer_height in (0.005, 0.02, 0.1):
         geometry = PlateGeometry.rectangular(128, 86, 4, 0.084, layer_height, 3)
-        host_gb = geometry.n_layers * len(strains) * 50 * geometry.length * geometry.width * 4 / 1e9
+        host_gb = geometry.max_layers * len(strains) * 50 * geometry.length * geometry.width * 4 / 1e9
         caps = [strain.capacity_per_voxel(geometry) for strain in strains]
-        print(f"layer {layer_height * 1e3:5.0f} um: {geometry.n_layers:4d} layers, "
+        print(f"layer {layer_height * 1e3:5.0f} um: {geometry.max_layers:4d} layers for a 3 mm tall colony, "
               f"host distribution {host_gb:7.1f} GB for 2 strains x 50 brackets, "
               f"capacity per voxel {caps[0]:.0f} / {caps[1]:.0f} cells")
 
@@ -96,7 +96,7 @@ def layout_report() -> None:
     height = colony.height_map()
     print(f"occupancy range {float(occupancy.min()):.3g}..{float(occupancy.max()):.3g}, "
           f"height map range {float(height.min()):.3g}..{float(height.max()):.3g} mm "
-          f"(max possible {geometry.n_layers * geometry.layer_height} mm)")
+          f"(max possible with the allocated layers {colony.n_layers * geometry.layer_height} mm)")
 
     figure, axis = plt.subplots(figsize=(5, 4))
     image = axis.imshow(height.get().T, origin="lower")
@@ -136,7 +136,7 @@ def streaming_timing() -> None:
     strains = make_strains()[:1]
     bracket_count = 50
     layer_bytes = len(strains) * bracket_count * geometry.length * geometry.width * 4
-    print(f"grid {geometry.length} x {geometry.width}, {geometry.n_layers} layers, "
+    print(f"grid {geometry.length} x {geometry.width}, {geometry.max_layers} layers, "
           f"{layer_bytes / 1e6:.1f} MB per layer, {free_bytes / 1e9:.2f} GB free on the device")
 
     def work(chunk: cp.ndarray, layers: slice) -> None:
@@ -150,7 +150,7 @@ def streaming_timing() -> None:
     for n_buffers in (1, 2):
         for chunk_layers in (1, 2, 5, 10):
             colony = ColonyState(geometry, strains, bracket_count, chunk_layers=chunk_layers,
-                                 n_buffers=n_buffers)
+                                 n_buffers=n_buffers, initial_layers=geometry.max_layers)
             colony.living[:] = 1.0
             colony.active_layers = colony.n_layers
             colony.map_layers(work)  # warm-up (kernel compilation, pool allocation)

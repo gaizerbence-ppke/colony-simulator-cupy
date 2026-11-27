@@ -63,7 +63,7 @@ def empty_colony(geometry: PlateGeometry, strains: list[CellStrain]) -> ColonySt
 def vertical_cosine_mode() -> None:
     print("--- 1. vertical diffusion of a cosine mode in the agar")
     h, depth = 0.1, 4.0
-    geometry = PlateGeometry.rectangular(h, h, depth, h, layer_height=0.005, max_colony_height=0.01)
+    geometry = PlateGeometry.rectangular(h, h, depth, h, layer_height=0.005)
     colony = empty_colony(geometry, [strain("s")])
     z = (np.arange(geometry.agar_depth) + 0.5) * h
     wavenumber = np.pi / (geometry.agar_depth * h)
@@ -125,7 +125,7 @@ def vertical_cosine_mode() -> None:
 def horizontal_point_source() -> None:
     print("--- 2. horizontal spread of one filled column")
     h, size, dt = 0.1, 16.0, 0.1
-    geometry = PlateGeometry.rectangular(size, size, 1.0, h, 0.005, 0.01)
+    geometry = PlateGeometry.rectangular(size, size, 1.0, h, 0.005)
     colony = empty_colony(geometry, [strain("s")])
     field = NutrientField(geometry, AGAR_DIFFUSION, ECM_DIFFUSION)
     ci, cj = geometry.centre_voxel()
@@ -157,7 +157,7 @@ def horizontal_point_source() -> None:
     axes[0].legend()
 
     # A source next to the wall of a circular dish: nothing may leak through the wall.
-    dish = PlateGeometry.circular(10.0, 1.0, h, 0.005, 0.01)
+    dish = PlateGeometry.circular(10.0, 1.0, h, 0.005)
     dish_colony = empty_colony(dish, [strain("s")])
     dish_field = NutrientField(dish, AGAR_DIFFUSION, ECM_DIFFUSION)
     i, j = dish.to_voxel(5.0, 0.3)
@@ -192,7 +192,7 @@ def horizontal_point_source() -> None:
 def uptake_mass_balance() -> None:
     print("--- 3. Michaelis-Menten uptake by two strains on a small plate")
     h, dt, hours = 0.1, 0.1, 12.0
-    geometry = PlateGeometry.rectangular(2.0, 2.0, 1.0, h, 0.005, 0.01)
+    geometry = PlateGeometry.rectangular(2.0, 2.0, 1.0, h, 0.005)
     strains = [strain("low affinity", M_MAX, KM), strain("high affinity", 0.5 * M_MAX, 0.1 * KM)]
     colony = empty_colony(geometry, strains)
     cells_per_voxel = (30.0, 20.0)
@@ -202,7 +202,9 @@ def uptake_mass_balance() -> None:
                 colony.seed_voxel(s, i, j, cells)
     field = NutrientField(geometry, AGAR_DIFFUSION, ECM_DIFFUSION, initial_concentration=GLUCOSE)
     mass0 = field.total_mass()
-    volume_ml = float(field.row_volume_ml[:field.agar_depth + 1].sum()) * geometry.length * geometry.width
+    # Agar plus the one colony layer the cells sit in, in ml.
+    volume_ml = (geometry.agar_depth * geometry.agar_voxel_volume
+                 + geometry.layer_voxel_volume) * geometry.length * geometry.width * 1e-3
 
     totals = np.array(cells_per_voxel) * geometry.length * geometry.width
     m_max = np.array([s.m_max for s in strains])
@@ -308,13 +310,14 @@ def region_conservation() -> None:
 def thin_layer_theta() -> None:
     print("--- 5. thin colony layers packed with cells: theta 0.5 vs theta 1")
     h, layer = 0.1, 0.005
-    geometry = PlateGeometry.rectangular(h, h, 4.0, h, layer, 0.2)
+    n_layers = 40
+    geometry = PlateGeometry.rectangular(h, h, 4.0, h, layer)
     colony = empty_colony(geometry, [strain("s")])
     capacity = colony.strains[0].capacity_per_voxel(geometry)
-    for l in range(geometry.n_layers):
+    for l in range(n_layers):
         colony.seed_voxel(0, 0, 0, capacity, layer=l)
     mesh_ratio = ECM_DIFFUSION * 0.1 / layer ** 2
-    print(f"{geometry.n_layers} layers of {layer * 1e3:.0f} um, {capacity:.0f} cells each; "
+    print(f"{n_layers} layers of {layer * 1e3:.0f} um, {capacity:.0f} cells each; "
           f"D dt / dz^2 in the colony = {mesh_ratio:.0f} for dt = 0.1 h")
 
     def run(theta: float, dt: float, hours: float) -> tuple[np.ndarray, list[np.ndarray], np.ndarray]:
@@ -326,7 +329,7 @@ def thin_layer_theta() -> None:
             uptake = field.step(colony, dt)
             eaten.append(eaten[-1] + float(uptake.sum(dtype=cp.float64)))
             if k % record == 0:
-                profile = cp.asnumpy(field.colony[:, 0, 0]).astype(np.float64)
+                profile = cp.asnumpy(field.colony[:n_layers, 0, 0]).astype(np.float64)
                 minima.append(profile.min())
                 profiles.append(profile)
         return np.array(minima), profiles, np.array(eaten[::record])
@@ -343,7 +346,7 @@ def thin_layer_theta() -> None:
               f"uptake differs from reference by up to {error:.1e} of the total")
 
     figure, axes = plt.subplots(1, 3, figsize=(15, 4.2))
-    heights = (np.arange(geometry.n_layers) + 0.5) * layer * 1e3
+    heights = (np.arange(n_layers) + 0.5) * layer * 1e3
     for label, (_, profiles, _) in runs.items():
         for index, style in ((0, "-"), (4, "--")):
             axes[0].plot(heights, profiles[index] * 1e3, style, marker=".", ms=3,
