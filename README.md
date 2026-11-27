@@ -29,6 +29,7 @@ pip install "colonysimulator[cuda13x] @ git+https://github.com/<owner>/colony-si
 | `colonysimulator/plate.py` | `PlateGeometry`: grid dimensions, agar depth, colony layers and the 2D plate mask (rectangular omnitray or circular dish) |
 | `colonysimulator/strain.py` | `CellStrain`: division time, Michaelis-Menten uptake (`m_max`, `km`), maintenance consumption, cell volume |
 | `colonysimulator/colony.py` | `ColonyState`: host-resident bracket-resolved distribution, GPU-resident per-layer totals and dead cells, height map |
+| `colonysimulator/nutrient.py` | `NutrientField`: glucose in agar and colony; per-column implicit vertical diffusion with Michaelis-Menten uptake (GPU kernel), per-layer mass-conserving Gaussian horizontal spread |
 | `colonysimulator/streaming.py` | `LayerStreamer`: double-buffered host-to-device streaming of layer chunks on CUDA streams |
 | `colonysimulator/kernels/` | CUDA kernels loaded with `cupy.RawKernel` |
 | `validation/` | Scripts that exercise one part of the model each and write figures to `validation_outputs/` |
@@ -37,5 +38,6 @@ pip install "colonysimulator[cuda13x] @ git+https://github.com/<owner>/colony-si
 
 The simulator is being rebuilt around a 3D colony (stacked layers of extracellular matrix on
 top of the agar), a per-column implicit nutrient solver with Michaelis-Menten sinks, and
-tension-driven cell spreading. Step 1 (geometry, data layout, streaming) is in place; the
-nutrient solver, growth kernel wiring, spreading and the experiment script follow.
+tension-driven cell spreading. Step 1 (geometry, data layout, streaming) and step 2 (nutrient
+transport and uptake) are in place; growth kernel wiring, spreading and the experiment script
+follow.

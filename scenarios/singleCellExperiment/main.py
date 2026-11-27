@@ -6,9 +6,9 @@ Run from anywhere:
 
 Outputs go to scenarios/singleCellExperiment/output/.
 
-Status: only the data layout exists so far (step 1). The time loop below runs and records
-height maps, but nothing changes between frames until the nutrient solver (step 2), the
-growth kernel (step 3) and spreading (step 4) are plugged in where marked.
+Status: the data layout (step 1) and the nutrient field (step 2) are in place. The cell is
+fed every step, but the colony does not change between frames until the growth kernel
+(step 3) and spreading (step 4) are plugged in where marked.
 """
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ except ImportError:
     # Fallback for a plain clone without installation, e.g. a fresh Colab runtime.
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+import cupy as cp
 import matplotlib
 import numpy as np
 from PIL import Image
@@ -28,7 +29,7 @@ from PIL import Image
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from colonysimulator import CellStrain, ColonyState, PlateGeometry
+from colonysimulator import CellStrain, ColonyState, NutrientField, PlateGeometry
 
 OUTPUT_DIR = Path(__file__).resolve().parent / "output"
 
@@ -40,10 +41,11 @@ SPATIAL_RESOLUTION = 0.1     # mm, horizontal voxel size and agar voxel height
 LAYER_HEIGHT = 0.005         # mm, one colony layer (about one cell)
 MAX_COLONY_HEIGHT = 0.5      # mm, sets the number of colony layers allocated
 
-# ---- nutrient (consumed by the solver from step 2 on) ------------------------------------
+# ---- nutrient ----------------------------------------------------------------------------
 GLUCOSE_CONCENTRATION = 0.1 / 1000   # g/ml in the agar at t = 0
-AGAR_DIFFUSION = 2.4                 # mm^2/h, glucose in agar
-ECM_DIFFUSION = 2.4                  # mm^2/h, glucose in the colony; placeholder until measured
+AGAR_DIFFUSION = 2.4                 # mm^2/h, glucose in agar (6.7e-6 cm^2/s)
+ECM_DIFFUSION = 0.72                 # mm^2/h, glucose in the colony (2e-6 cm^2/s; literature 1-3e-6)
+NUTRIENT_THETA = 1.0                 # 1 = backward Euler, 0.5 = Crank-Nicolson (see validation/step2)
 
 # ---- strain ------------------------------------------------------------------------------
 GLUCOSE_MOLECULAR_WEIGHT = 180e-3    # g/mmol
@@ -120,19 +122,26 @@ def main() -> None:
     print(f"capacity per voxel: {strain.capacity_per_voxel(geometry):.0f} cells, "
           f"maintenance food ratio: {strain.maintenance_ratio:.3f}")
 
+    nutrient = NutrientField(geometry, AGAR_DIFFUSION, ECM_DIFFUSION,
+                             initial_concentration=GLUCOSE_CONCENTRATION, theta=NUTRIENT_THETA)
     colony.seed_single_cell_at_centre(strain.name)
+    initial_mass = nutrient.total_mass()
+    eaten = 0.0
 
     frames: list[np.ndarray] = []
     for step in range(N_STEPS):
-        # Per-step physics, in this order once implemented:
-        #   step 2: nutrient column solve with Michaelis-Menten sinks + horizontal spread
-        #   step 3: growth kernel over the streamed bracket distribution
-        #   step 4: tension-driven spreading of living and dead cells
+        # step 2: nutrient column solve with Michaelis-Menten sinks + horizontal spread
+        uptake = nutrient.step(colony, TIME_RESOLUTION)
+        eaten += float(uptake.sum(dtype=cp.float64))
+        # step 3: growth kernel over the streamed bracket distribution (turns `uptake` into cells)
+        # step 4: tension-driven spreading of living and dead cells
         if step % RECORD_EVERY == RECORD_EVERY - 1:
             living, dead = colony.cell_counts()
             hours = (step + 1) * TIME_RESOLUTION
             print(f"step {step + 1:5d} ({hours:6.1f} h): living {living.sum():.4g}, "
-                  f"dead {dead.sum():.4g}, active layers {colony.active_layers}")
+                  f"dead {dead.sum():.4g}, active layers {colony.active_layers}, "
+                  f"glucose eaten {eaten:.3g} g, mass balance error "
+                  f"{(nutrient.total_mass() + eaten - initial_mass) / initial_mass:.1e}")
             frames.append(colony.height_map().get())
 
     final_height = colony.height_map().get()

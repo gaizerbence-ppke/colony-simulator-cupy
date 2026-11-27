@@ -17,6 +17,15 @@ import numpy as np
 from numpy.typing import ArrayLike
 
 
+def voxel_count(extent_mm: float, voxel_mm: float) -> int:
+    """Number of whole voxels of size `voxel_mm` that fit in `extent_mm`.
+
+    Plain floor division of floats undercounts when the ratio is a whole number that is not
+    exactly representable (4.0 // 0.1 == 39.0), so a small tolerance is added first.
+    """
+    return int(math.floor(extent_mm / voxel_mm + 1e-6))
+
+
 class PlateGeometry:
     # Attributes set in __init__ (listed here so their types are visible in one place).
     mm_length: float           # mm
@@ -41,9 +50,9 @@ class PlateGeometry:
         self.layer_height = float(layer_height)
         self.max_colony_height = float(max_colony_height)
 
-        self.length = int(self.mm_length // self.spatial_resolution)
-        self.width = int(self.mm_width // self.spatial_resolution)
-        self.agar_depth = int(self.mm_depth // self.spatial_resolution)
+        self.length = voxel_count(self.mm_length, self.spatial_resolution)
+        self.width = voxel_count(self.mm_width, self.spatial_resolution)
+        self.agar_depth = voxel_count(self.mm_depth, self.spatial_resolution)
         self.n_layers = int(math.ceil(self.max_colony_height / self.layer_height))
 
         if self.length < 1 or self.width < 1 or self.agar_depth < 1 or self.n_layers < 1:
@@ -70,7 +79,7 @@ class PlateGeometry:
     def circular(cls, diameter: float, mm_depth: float, spatial_resolution: float,
                  layer_height: float, max_colony_height: float) -> PlateGeometry:
         """Circular Petri dish of the given diameter, embedded in a square grid."""
-        length = int(diameter // spatial_resolution)
+        length = voxel_count(diameter, spatial_resolution)
         centre = (length - 1) / 2.0
         radius = diameter / spatial_resolution / 2.0
         ii, jj = np.meshgrid(np.arange(length), np.arange(length), indexing="ij")
@@ -102,8 +111,8 @@ class PlateGeometry:
 
     def to_voxel(self, x_mm: float, y_mm: float) -> tuple[int, int]:
         """Map a position in mm (measured from the plate corner) to grid indices."""
-        i = int(x_mm // self.spatial_resolution)
-        j = int(y_mm // self.spatial_resolution)
+        i = voxel_count(x_mm, self.spatial_resolution)
+        j = voxel_count(y_mm, self.spatial_resolution)
         if not (0 <= i < self.length and 0 <= j < self.width):
             raise ValueError(f"({x_mm}, {y_mm}) mm lies outside the {self.mm_length} x {self.mm_width} mm grid")
         if not bool(self.mask[i, j]):

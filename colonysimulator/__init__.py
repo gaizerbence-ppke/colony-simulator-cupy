@@ -2,6 +2,7 @@
 from .plate import PlateGeometry
 from .strain import CellStrain
 from .colony import ColonyState
+from .nutrient import NutrientField
 from .streaming import LayerStreamer, pinned_zeros
 
-__all__ = ["PlateGeometry", "CellStrain", "ColonyState", "LayerStreamer", "pinned_zeros"]
+__all__ = ["PlateGeometry", "CellStrain", "ColonyState", "NutrientField", "LayerStreamer", "pinned_zeros"]
